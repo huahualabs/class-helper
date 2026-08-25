@@ -2,9 +2,11 @@
 // ✅ HUA_SUBJECT_TOOL_UNIFORM_SIZE_20260711：科目分類框與科目按鍵統一尺寸，長科目名稱也能穩定置中顯示。
 // ✅ HUA_SCHEDULE_IOS_TIME_FIT_20260712：修正 iPhone Safari 作息起訖與快速設定時間欄超出卡片。
 import { computed, onMounted, ref, watch } from 'vue'
-import { SCHEDULE_SOURCE_MODE, SCHEDULE_SOURCE_MODES, SHARED_CLASS_ID } from '../config/sharedClassSchedule'
-import { classScheduleRepository } from '../services/classScheduleRepository'
-import { signInCentralPortalTeacher, waitForCentralPortalSession } from '../services/centralPortalFirebase'
+import ScheduleImportPanel from '@owner-schedule-import'
+import { SCHEDULE_IMPORT_ENABLED, SCHEDULE_SOURCE_MODE, SCHEDULE_SOURCE_MODES, SHARED_CLASS_ID } from '../config/sharedClassSchedule'
+import { classScheduleRepository } from '@owner-class-schedule-repository'
+import { createLatestScheduleSaveQueue } from '../services/latestScheduleSaveQueue'
+import { signInCentralPortalTeacher, waitForCentralPortalSession } from '@owner-central-firebase'
 
 const STORAGE_KEY = 'classHelperWeeklyScheduleV1'
 
@@ -257,6 +259,9 @@ const quick = ref({
   applyMode: 'preserve'
 })
 let saveTimer = null
+const centralSaveQueue = createLatestScheduleSaveQueue(schedule => (
+  classScheduleRepository.saveClassSchedule(SHARED_CLASS_ID, schedule)
+))
 
 watch(data, value => {
   window.clearTimeout(saveTimer)
@@ -265,7 +270,7 @@ watch(data, value => {
   saveTimer = window.setTimeout(async () => {
     if (isCentralMode) {
       try {
-        await classScheduleRepository.saveClassSchedule(SHARED_CLASS_ID, value)
+        await centralSaveQueue.enqueue(value)
         window.dispatchEvent(new CustomEvent('class-helper-central-schedule-updated'))
         centralState.value = 'ready'
         centralMessage.value = '共享課表已儲存。'
@@ -815,6 +820,8 @@ function getStatusFor(dayKey, minute) {
       <button v-if="centralState === 'auth-required'" type="button" @click="loginCentralSchedule">登入中央教師帳號</button>
       <button v-else-if="centralState === 'load-failed' || centralState === 'permission'" type="button" @click="loadCentralSchedule">重新載入</button>
     </section>
+
+    <ScheduleImportPanel v-if="!isCentralMode && SCHEDULE_IMPORT_ENABLED" />
 
     <div v-if="!isCentralMode || centralReady" class="schedule-tabs" role="tablist" aria-label="課表設定頁籤">
       <button type="button" :class="{ active: activeTab === 'week' }" @click="activeTab = 'week'">本週課表</button>

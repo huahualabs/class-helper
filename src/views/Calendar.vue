@@ -5,11 +5,12 @@ import {
   CALENDAR_SOURCE_MODES,
   SHARED_CLASS_ID,
 } from '../config/sharedClassEvents'
+import { OWNER_PARENT_PORTAL_ENABLED } from '../config/deploymentProfile'
 import {
   signInCentralPortalTeacher,
   waitForCentralPortalSession,
-} from '../services/centralPortalFirebase'
-import { classEventsRepository } from '../services/classEventsRepository'
+} from '@owner-central-firebase'
+import { classEventsRepository } from '@owner-class-events-repository'
 import {
   composeClassEventTime,
   formatClassEventTime,
@@ -505,7 +506,7 @@ onMounted(initializeCentralCalendar)
         <h2>🗓️ 行事曆</h2>
         <p>月曆從週日開始，週曆從週一開始。節日、節氣與自訂事項會一起顯示。</p>
         <p class="source-mode" data-testid="calendar-source-mode">
-          {{ isCentralMode ? `中央共享行事曆 · ${SHARED_CLASS_ID}` : 'Legacy local rollback mode' }}
+          {{ isCentralMode ? `中央共享行事曆 · ${SHARED_CLASS_ID}` : '本機行事曆' }}
         </p>
       </div>
 
@@ -617,7 +618,7 @@ onMounted(initializeCentralCalendar)
 
         <div v-else-if="isCentralMode && permissionDenied" class="state-box error" data-testid="calendar-permission-denied">
           <p>目前帳號沒有 {{ SHARED_CLASS_ID }} 的教師權限。</p>
-          <button :disabled="signingIn" @click="loginCentralTeacher">改用 Emulator 測試教師登入</button>
+          <button :disabled="signingIn" @click="loginCentralTeacher">重新登入教師帳號</button>
         </div>
 
         <div v-else-if="isCentralMode && loadFailed" class="state-box error" data-testid="calendar-load-failed">
@@ -636,7 +637,7 @@ onMounted(initializeCentralCalendar)
         >
           <h4>手動事項</h4>
 
-          <p v-if="!isCentralMode" class="rollback-note">
+          <p v-if="!isCentralMode && OWNER_PARENT_PORTAL_ENABLED" class="rollback-note">
             目前使用保留的本機 rollback 資料；不會與中央行事曆合併或雙寫。
           </p>
 

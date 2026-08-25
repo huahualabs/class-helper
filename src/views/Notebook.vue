@@ -3,6 +3,7 @@
 // ✅ HUA_NOTEBOOK_ONE_SCREEN_MOBILE_REVIEW_20260710：簿本頁已補桌機一頁式壓縮與手機不卡片切半。
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { CLOUD_DATA_UPDATED_EVENT } from '../services/cloudSync'
+import { parseStudentRoster } from '../domain/studentRoster'
 
 const homeworkOptions = [
   '聯絡簿', '甲本', '乙本', '國習', '數習', '社習',
@@ -16,14 +17,11 @@ const WEEKLY_KEY = 'notebookWeeklyRecordsV2'
 const NOTIFIED_KEY = 'notebookNotifiedV2'
 const cloudRefreshSeed = ref(0)
 
-const students = computed(() => {
+const roster = computed(() => {
   cloudRefreshSeed.value
-  const text = localStorage.getItem('students') || ''
-  return text
-    .split('\n')
-    .map(name => name.trim())
-    .filter(Boolean)
+  return parseStudentRoster(localStorage.getItem('students') || '')
 })
+const students = computed(() => roster.value.map(student => student.raw))
 
 const className = computed(() => {
   cloudRefreshSeed.value
@@ -48,7 +46,7 @@ function parseCompletionStudent(line, index) {
     : { seatNo: index + 1, name: cleanStudentName(text), key: `${index + 1}__${cleanStudentName(text)}` }
 }
 
-const completionStudents = computed(() => students.value.map(parseCompletionStudent))
+const completionStudents = computed(() => roster.value)
 
 
 function normalizedCompletionName(value) {
@@ -147,11 +145,20 @@ function cleanStudentName(name = '') {
 }
 
 function studentNumber(index) {
-  return String(index + 1).padStart(2, '0')
+  return String(roster.value[index]?.seatNo || index + 1).padStart(2, '0')
 }
 
 function studentDisplayName(index) {
-  return cleanStudentName(students.value[index]) || `學生${index + 1}`
+  return roster.value[index]?.name || `學生${index + 1}`
+}
+
+function studentKey(index) {
+  return roster.value[index]?.key || `legacy-index-${index}`
+}
+
+function studentStatus(board, index) {
+  const key = studentKey(index)
+  return board.statuses[key] ?? board.statuses[index] ?? 'none'
 }
 
 
@@ -189,6 +196,26 @@ function loadBoards() {
 }
 
 const boards = reactive(loadBoards())
+
+// Legacy boards used array indexes. Convert them once while the current roster
+// still supplies the identity mapping; later roster reordering will not move a
+// status to another student.
+boards.forEach(board => {
+  roster.value.forEach((student, index) => {
+    if (board.statuses[student.key] === undefined && board.statuses[index] !== undefined) {
+      board.statuses[student.key] = board.statuses[index]
+      delete board.statuses[index]
+    }
+  })
+})
+localStorage.setItem(STORAGE_KEY, JSON.stringify(boards.map(board => ({
+  id: board.id,
+  title: board.title,
+  customTitle: board.customTitle,
+  subject: board.subject,
+  round: board.round,
+  statuses: board.statuses,
+}))))
 const toast = ref('')
 const reminderText = ref('')
 const isReminderOpen = ref(false)
@@ -357,7 +384,7 @@ function setAll(board, status) {
 }
 
 function toggleStatus(board, index) {
-  const current = board.statuses[index] || 'none'
+  const current = studentStatus(board, index)
   const nextMap = {
     none: 'missing',
     missing: 'fix',
@@ -376,8 +403,9 @@ function toggleStatus(board, index) {
   checkAllDone(board)
 }
 
-function updateStudentStatus(board, index, next, previous = board.statuses[index] || 'none') {
-  board.statuses[index] = next
+function updateStudentStatus(board, index, next, previous = studentStatus(board, index)) {
+  board.statuses[studentKey(index)] = next
+  delete board.statuses[index]
 
   if (previous === 'missing' || previous === 'fix') {
     resolveWeeklyRecord(board, index, previous)
@@ -390,7 +418,8 @@ function updateStudentStatus(board, index, next, previous = board.statuses[index
 
 function addWeeklyRecord(board, index, status) {
   const title = getTitle(board)
-  const recordKey = `${currentWeekStart.value}|${todayKey()}|${board.id}|${title}|${index}|${status}`
+  const identity = studentKey(index)
+  const recordKey = `${currentWeekStart.value}|${todayKey()}|${board.id}|${title}|${identity}|${status}`
   const exists = weeklyRecords.value.some(record => record.key === recordKey)
   if (exists) return
 
@@ -401,6 +430,7 @@ function addWeeklyRecord(board, index, status) {
     boardId: board.id,
     title,
     studentIndex: index,
+    studentKey: identity,
     studentName: studentDisplayName(index),
     status,
     resolved: false,
@@ -416,7 +446,7 @@ function resolveWeeklyRecord(board, index, status) {
       record.weekStart === currentWeekStart.value &&
       record.boardId === board.id &&
       record.title === title &&
-      record.studentIndex === index &&
+      (record.studentKey ? record.studentKey === studentKey(index) : record.studentIndex === index) &&
       record.status === status &&
       !record.resolved
     ) {
@@ -436,7 +466,7 @@ function showReward(board, index) {
 }
 
 function isAllOk(board) {
-  return students.value.length > 0 && students.value.every((_, index) => board.statuses[index] === 'ok')
+  return students.value.length > 0 && students.value.every((_, index) => studentStatus(board, index) === 'ok')
 }
 
 function checkAllDone(board) {
@@ -486,7 +516,7 @@ function getReminderItems(board, status) {
       name,
       number: index + 1,
       label: studentLabel(index),
-      status: board.statuses[index]
+      status: studentStatus(board, index)
     }))
     .filter(item => item.status === status)
 }
@@ -503,10 +533,10 @@ function reminderButtonText(board) {
 
 function boardStats(board) {
   return {
-    ok: students.value.filter((_, index) => board.statuses[index] === 'ok').length,
-    fix: students.value.filter((_, index) => board.statuses[index] === 'fix').length,
-    missing: students.value.filter((_, index) => board.statuses[index] === 'missing').length,
-    none: students.value.filter((_, index) => !board.statuses[index] || board.statuses[index] === 'none').length
+    ok: students.value.filter((_, index) => studentStatus(board, index) === 'ok').length,
+    fix: students.value.filter((_, index) => studentStatus(board, index) === 'fix').length,
+    missing: students.value.filter((_, index) => studentStatus(board, index) === 'missing').length,
+    none: students.value.filter((_, index) => studentStatus(board, index) === 'none').length
   }
 }
 
@@ -602,7 +632,9 @@ const activeWeeklyRecords = computed(() => {
 const weeklySummary = computed(() => {
   return students.value.map((name, index) => {
     const displayName = studentDisplayName(index)
-    const records = activeWeeklyRecords.value.filter(record => record.studentIndex === index)
+    const records = activeWeeklyRecords.value.filter(record => (
+      record.studentKey ? record.studentKey === studentKey(index) : record.studentIndex === index
+    ))
     const missing = records.filter(record => record.status === 'missing')
     const fix = records.filter(record => record.status === 'fix')
     return {
@@ -814,15 +846,15 @@ function formatDate(dateText) {
             <div class="seat-grid">
               <button
                 v-for="(student, index) in students"
-                :key="student + index"
+                :key="studentKey(index)"
                 class="seat"
-                :class="statusClass(board.statuses[index])"
+                :class="statusClass(studentStatus(board, index))"
                 @click="toggleStatus(board, index)"
-                :title="`${studentLabel(index)}：${statusText(board.statuses[index])}`"
+                :title="`${studentLabel(index)}：${statusText(studentStatus(board, index))}`"
               >
                 <strong>{{ studentNumber(index) }}</strong>
                 <small>{{ studentDisplayName(index) }}</small>
-                <span>{{ statusIcon(board.statuses[index]) }}</span>
+                <span>{{ statusIcon(studentStatus(board, index)) }}</span>
                 <em v-if="board.sparkle[index]">✨</em>
               </button>
             </div>

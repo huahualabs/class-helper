@@ -9,34 +9,38 @@ import {
 } from 'firebase/auth'
 import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
 
-const CENTRAL_APP_NAME = 'class-helper-central-parent-portal'
+const CENTRAL_APP_NAME = 'class-helper-optional-central-integration'
 let centralServices
 let emulatorConnected = false
 
-function requiredEnv(name) {
-  const value = String(import.meta.env[name] || '').trim()
+function requiredEnv(name, env = import.meta.env) {
+  const value = String(env[name] || '').trim()
   if (!value) throw new Error(`缺少班級平台中央 Firebase 設定：${name}`)
   return value
 }
 
-function centralConfig() {
-  const useEmulators = import.meta.env.DEV && import.meta.env.VITE_CENTRAL_USE_FIREBASE_EMULATORS === 'true'
-  const centralCalendarEnabled = import.meta.env.VITE_SHARED_CALENDAR_SOURCE_MODE === 'central'
-  const centralScheduleEnabled = import.meta.env.VITE_SHARED_SCHEDULE_SOURCE_MODE === 'central'
+export function resolveCentralPortalConfig(env = import.meta.env) {
+  const ownerEnabled = env.VITE_CLASS_HELPER_DEPLOYMENT_PROFILE === 'owner-parent-portal'
+  if (!ownerEnabled) {
+    throw new Error('安全停止：generic class-helper 不可初始化 owner central integration。')
+  }
+  const useEmulators = Boolean(env.DEV) && env.VITE_CENTRAL_USE_FIREBASE_EMULATORS === 'true'
+  const centralCalendarEnabled = env.VITE_SHARED_CALENDAR_SOURCE_MODE === 'central'
+  const centralScheduleEnabled = env.VITE_SHARED_SCHEDULE_SOURCE_MODE === 'central'
   if ((centralCalendarEnabled || centralScheduleEnabled) && !useEmulators) {
     throw new Error('安全停止：中央共享資料目前只允許連線到中央 Firebase Emulator。')
   }
   return {
     useEmulators,
     firebase: {
-      apiKey: useEmulators ? 'demo-api-key' : requiredEnv('VITE_CENTRAL_FIREBASE_API_KEY'),
-      authDomain: useEmulators ? 'localhost' : requiredEnv('VITE_CENTRAL_FIREBASE_AUTH_DOMAIN'),
+      apiKey: useEmulators ? 'demo-api-key' : requiredEnv('VITE_CENTRAL_FIREBASE_API_KEY', env),
+      authDomain: useEmulators ? 'localhost' : requiredEnv('VITE_CENTRAL_FIREBASE_AUTH_DOMAIN', env),
       projectId: useEmulators
-        ? (import.meta.env.VITE_CENTRAL_FIREBASE_EMULATOR_PROJECT_ID || 'demo-class-helper-class-events')
-        : requiredEnv('VITE_CENTRAL_FIREBASE_PROJECT_ID'),
-      storageBucket: useEmulators ? 'demo.invalid' : requiredEnv('VITE_CENTRAL_FIREBASE_STORAGE_BUCKET'),
-      messagingSenderId: useEmulators ? '000000000000' : requiredEnv('VITE_CENTRAL_FIREBASE_MESSAGING_SENDER_ID'),
-      appId: useEmulators ? '1:000000000000:web:class-helper-central' : requiredEnv('VITE_CENTRAL_FIREBASE_APP_ID'),
+        ? (env.VITE_CENTRAL_FIREBASE_EMULATOR_PROJECT_ID || 'demo-class-helper-class-events')
+        : requiredEnv('VITE_CENTRAL_FIREBASE_PROJECT_ID', env),
+      storageBucket: useEmulators ? 'demo.invalid' : requiredEnv('VITE_CENTRAL_FIREBASE_STORAGE_BUCKET', env),
+      messagingSenderId: useEmulators ? '000000000000' : requiredEnv('VITE_CENTRAL_FIREBASE_MESSAGING_SENDER_ID', env),
+      appId: useEmulators ? '1:000000000000:web:class-helper-central' : requiredEnv('VITE_CENTRAL_FIREBASE_APP_ID', env),
     },
   }
 }
@@ -44,7 +48,7 @@ function centralConfig() {
 export function getCentralPortalServices() {
   if (centralServices) return centralServices
 
-  const config = centralConfig()
+  const config = resolveCentralPortalConfig()
   const app = getApps().find(candidate => candidate.name === CENTRAL_APP_NAME)
     || initializeApp(config.firebase, CENTRAL_APP_NAME)
   const auth = getAuth(app)

@@ -2,6 +2,7 @@
 // ✅ HUA_STUDENTS_ONE_SCREEN_MOBILE_REVIEW_20260710：此頁已加入桌機一頁式與手機響應式檢查。
 import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { CLOUD_DATA_UPDATED_EVENT } from '../services/cloudSync'
+import { parseStudentRoster, rosterIdentityIssues } from '../domain/studentRoster'
 
 const className = ref(localStorage.getItem('className') || '')
 const studentText = ref(localStorage.getItem('students') || '')
@@ -26,32 +27,8 @@ onBeforeUnmount(() => {
   window.removeEventListener(CLOUD_DATA_UPDATED_EVENT, refreshStudentsFromCloud)
 })
 
-function parseStudentLine(line, index) {
-  const text = line.trim()
-  const match = text.match(/^(\d{1,2})[\s、.．,-]+(.+)$/)
-
-  if (match) {
-    return {
-      seatNo: Number(match[1]),
-      name: match[2].trim(),
-      raw: text
-    }
-  }
-
-  return {
-    seatNo: index + 1,
-    name: text,
-    raw: text
-  }
-}
-
-const students = computed(() =>
-  studentText.value
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line !== '')
-    .map(parseStudentLine)
-)
+const students = computed(() => parseStudentRoster(studentText.value))
+const identityIssues = computed(() => rosterIdentityIssues(students.value))
 
 const seatSummary = computed(() => {
   if (students.value.length === 0) return '尚未建立名單'
@@ -116,6 +93,11 @@ function loadExampleWithEmptyNumbers() {
           placeholder="1 王小明&#10;2 李小華&#10;15 張小宇&#10;21 林小美"
         ></textarea>
 
+        <div v-if="identityIssues.length" class="identity-warning" role="alert">
+          <strong>名單中有重複識別，請先修正：</strong>
+          <span v-for="issue in identityIssues" :key="issue">{{ issue }}</span>
+        </div>
+
         <div class="student-actions">
           <p class="count">{{ seatSummary }}</p>
           <button class="danger" @click="clearStudents">清空名單</button>
@@ -155,6 +137,16 @@ function loadExampleWithEmptyNumbers() {
 <style scoped>
 .students-page {
   max-width: 1100px;
+}
+
+.identity-warning {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #fff1f2;
+  color: #9f2d24;
 }
 
 .student-editor-grid {

@@ -3,8 +3,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { SCHEDULE_SOURCE_MODE, SCHEDULE_SOURCE_MODES, SHARED_CLASS_ID } from '../config/sharedClassSchedule'
-import { classScheduleRepository } from '../services/classScheduleRepository'
-import { waitForCentralPortalSession } from '../services/centralPortalFirebase'
+import { classScheduleRepository } from '@owner-class-schedule-repository'
+import { waitForCentralPortalSession } from '@owner-central-firebase'
 
 const STORAGE_KEY = 'classHelperWeeklyScheduleV1'
 const router = useRouter()

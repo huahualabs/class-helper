@@ -32,7 +32,7 @@ function validateSchedule(schedule) {
   }
 }
 
-function assembleSchedule(metadata, periodDocs, entryDocs) {
+export function assembleSchedule(metadata, periodDocs, entryDocs) {
   const periods = periodDocs
     .sort((left, right) => left.sortOrder - right.sortOrder || left.periodId.localeCompare(right.periodId))
     .map((period) => ({

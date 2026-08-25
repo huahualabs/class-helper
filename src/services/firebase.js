@@ -14,11 +14,13 @@ import {
 import { get, getDatabase, ref, remove, set } from 'firebase/database'
 
 const APP_NAME_PREFIX = 'class-helper-personal-'
-const BUILT_IN_APP_CHECK_SITE_KEYS = Object.freeze({
-  // reCAPTCHA Enterprise Site Key 是公開的網站識別碼，不是密碼。
-  // 這組金鑰已在 Google Cloud 限制為班級助手正式網域，且只套用於 Hua 的 Firebase 專案。
-  'class-helper-2026': '6LcFtk8tAAAAAGZAjQAF_FI4hdBoYT4tOPo48lq_'
-})
+function builtInAppCheckSiteKey(config) {
+  const configuredProject = String(import.meta.env.VITE_PERSONAL_FIREBASE_BUILTIN_APPCHECK_PROJECT_ID || '').trim()
+  const configuredKey = String(import.meta.env.VITE_PERSONAL_FIREBASE_BUILTIN_APPCHECK_SITE_KEY || '').trim()
+  return configuredProject && configuredKey && configuredProject === String(config?.projectId || '').trim()
+    ? configuredKey
+    : ''
+}
 const appCheckInstances = new Map()
 let currentAppName = ''
 
@@ -67,7 +69,7 @@ export function resolveTeacherAppCheckSiteKey(config) {
   const source = config && typeof config === 'object' ? config : {}
   const custom = String(source.appCheckSiteKey || '').trim()
   if (custom) return custom
-  return BUILT_IN_APP_CHECK_SITE_KEYS[String(source.projectId || '').trim()] || ''
+  return builtInAppCheckSiteKey(source)
 }
 
 export function hasTeacherAppCheckConfig(config) {
@@ -76,7 +78,7 @@ export function hasTeacherAppCheckConfig(config) {
 
 export function getTeacherAppCheckSource(config) {
   if (String(config?.appCheckSiteKey || '').trim()) return 'personal'
-  return BUILT_IN_APP_CHECK_SITE_KEYS[String(config?.projectId || '').trim()] ? 'built-in' : 'none'
+  return builtInAppCheckSiteKey(config) ? 'built-in' : 'none'
 }
 
 function shouldUseDebugProvider() {

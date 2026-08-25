@@ -4,8 +4,8 @@
     ".write": false,
     "users": {
       "$uid": {
-        ".read": "auth != null && auth.uid === $uid && auth.uid === 'YOUR_FIREBASE_UID'",
-        ".write": "auth != null && auth.uid === $uid && auth.uid === 'YOUR_FIREBASE_UID'",
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid",
         "systemChecks": {
           "wizard": {
             ".validate": "newData.hasChildren(['ok', 'checkedAt', 'projectId'])",

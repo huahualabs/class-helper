@@ -40,6 +40,7 @@ import {
   signOutCloud,
   syncNow
 } from '../services/cloudSync'
+import FIREBASE_RULES from '../../firebase/database.rules.template.json?raw'
 
 // ✅ HUA_FIREBASE_WIZARD_FEEDBACK_FIX_20260712：移除重複入口、補上前置檢查與精靈內錯誤提示。
 // ✅ HUA_SYNC_STATUS_CONFLICT_UI_20260712：正式個人 Firebase 同步狀態、手動同步與衝突選擇介面。
@@ -80,19 +81,6 @@ const appCheckStatusText = computed(() => {
   if (appCheckConfigured.value) return '🛡️ App Check 已設定，請重新測試連線'
   return 'App Check 尚未設定（啟用強制執行前必須完成）'
 })
-
-const FIREBASE_RULES = `{
-  "rules": {
-    ".read": false,
-    ".write": false,
-    "users": {
-      "$uid": {
-        ".read": "auth != null && auth.uid === $uid",
-        ".write": "auth != null && auth.uid === $uid"
-      }
-    }
-  }
-}`
 
 const steps = [
   { number: 1, title: '建立自己的 Firebase 專案', short: '建立專案' },
@@ -677,7 +665,7 @@ async function chooseConflictVersion(strategy) {
                 <span>啟用 App Check 時使用。這是可放在網頁前端的公開 Site Key，不是 Secret Key。</span>
               </div>
               <input v-model.trim="appCheckSiteKeyText" autocomplete="off" spellcheck="false" placeholder="例如：6Lc...（未啟用 App Check 可先留空）" />
-              <small v-if="appCheckSource === 'built-in'">目前的 <code>class-helper-2026</code> 專案已內建對應 Site Key，這一欄可留空。</small>
+              <small v-if="appCheckSource === 'built-in'">此部署已由管理者設定對應 Site Key，這一欄可留空。</small>
               <small v-else>其他老師若使用自己的 Firebase，必須在自己的 App Check 建立 Site Key，並貼在這裡。</small>
             </div>
             <button type="button" class="data-primary" @click="saveFirebaseConfigOnly">檢查並保存設定</button>

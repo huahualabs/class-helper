@@ -3,12 +3,14 @@
 // ✅ HUA_TOOTHBRUSH_ONE_SCREEN_MOBILE_REVIEW_20260710：此頁已加入桌機一頁式與手機響應式檢查。
 // CHECK_MARKER_20260707_NAME_CENTER_COMPACT: contains isTuesday + visibleStudents; completed cards auto-hide; centered compact student names.
 import { computed, reactive, ref, watch } from 'vue'
+import { parseStudentRoster } from '../domain/studentRoster'
 
 const today = new Date()
 const selectedDate = ref(toDateKey(today))
 const toast = ref('')
 const audioEnabled = ref(localStorage.getItem('toothbrushSoundEnabled') !== 'false')
-const students = computed(() => (localStorage.getItem('students') || '').split('\n').map(name => name.trim()).filter(Boolean))
+const roster = computed(() => parseStudentRoster(localStorage.getItem('students') || ''))
+const students = computed(() => roster.value.map(student => student.raw))
 function cleanStudentName(name = '') {
   return String(name).replace(/^\s*(?:座號)?\d{1,2}[.、．)）\- ]+/, '').trim()
 }
@@ -31,7 +33,7 @@ function parseCompletionStudent(line, index) {
     : { seatNo: index + 1, name: cleanStudentName(text), key: `${index + 1}__${cleanStudentName(text)}` }
 }
 
-const completionStudents = computed(() => students.value.map(parseCompletionStudent))
+const completionStudents = computed(() => roster.value)
 
 
 function normalizedCompletionName(value) {
@@ -123,6 +125,16 @@ function rewardWholeClass() {
 
 
 const records = reactive(loadRecords())
+Object.values(records).forEach(day => {
+  if (!day || typeof day !== 'object') return
+  roster.value.forEach((student, index) => {
+    if (day[student.key] === undefined && day[index] !== undefined) {
+      day[student.key] = day[index]
+      delete day[index]
+    }
+  })
+})
+localStorage.setItem('toothbrushRecords', JSON.stringify(records))
 const weekdayNames = ['日', '一', '二', '三', '四', '五', '六']
 const selectedDateObject = computed(() => parseDateKey(selectedDate.value))
 const selectedDateText = computed(() => `${selectedDateObject.value.getMonth() + 1}/${selectedDateObject.value.getDate()}（${weekdayNames[selectedDateObject.value.getDay()]}）`)
@@ -170,7 +182,12 @@ function loadRecords() {
 function toDateKey(date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 function parseDateKey(dateKey) { const [y, m, d] = dateKey.split('-').map(Number); return new Date(y, m - 1, d) }
 function ensureStudent(index) {
-  const item = dayRecord.value[index] ||= { mouth: 'none', desk: false }
+  const key = roster.value[index]?.key || `legacy-index-${index}`
+  if (!dayRecord.value[key] && dayRecord.value[index]) {
+    dayRecord.value[key] = dayRecord.value[index]
+    delete dayRecord.value[index]
+  }
+  const item = dayRecord.value[key] ||= { mouth: 'none', desk: false }
   if (!item.mouth) {
     const hadBrushed = !!(item.tooth || item.brushed || item.brush || item.toothbrush)
     item.mouth = hadBrushed ? 'tooth' : 'none'
@@ -204,7 +221,8 @@ function beep(type = 'tooth') {
   } catch {}
 }
 function mouthState(index) {
-  const item = dayRecord.value[index]
+  const key = roster.value[index]?.key || `legacy-index-${index}`
+  const item = dayRecord.value[key] || dayRecord.value[index]
   if (!item) return 'none'
   return item.mouth || (item.tooth ? 'tooth' : 'none')
 }
@@ -231,7 +249,9 @@ function isMouthComplete(index) {
   return isTuesday.value ? state === 'rinse' : state !== 'none'
 }
 function isStudentComplete(index) {
-  return isMouthComplete(index) && !!dayRecord.value[index]?.desk
+  const key = roster.value[index]?.key || `legacy-index-${index}`
+  const item = dayRecord.value[key] || dayRecord.value[index]
+  return isMouthComplete(index) && !!item?.desk
 }
 function toggleMouth(index) {
   const item = ensureStudent(index)
