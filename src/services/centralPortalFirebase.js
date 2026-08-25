@@ -22,8 +22,9 @@ function requiredEnv(name) {
 function centralConfig() {
   const useEmulators = import.meta.env.DEV && import.meta.env.VITE_CENTRAL_USE_FIREBASE_EMULATORS === 'true'
   const centralCalendarEnabled = import.meta.env.VITE_SHARED_CALENDAR_SOURCE_MODE === 'central'
-  if (centralCalendarEnabled && !useEmulators) {
-    throw new Error('安全停止：共享行事曆目前只允許連線到中央 Firebase Emulator。')
+  const centralScheduleEnabled = import.meta.env.VITE_SHARED_SCHEDULE_SOURCE_MODE === 'central'
+  if ((centralCalendarEnabled || centralScheduleEnabled) && !useEmulators) {
+    throw new Error('安全停止：中央共享資料目前只允許連線到中央 Firebase Emulator。')
   }
   return {
     useEmulators,

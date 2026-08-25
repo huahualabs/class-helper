@@ -2,6 +2,9 @@
 // ✅ HUA_STATUS_TIME_INPUT_MOBILE_FIT_20260712：現在狀態測試時間欄在手機 Safari 不再爆框。
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { SCHEDULE_SOURCE_MODE, SCHEDULE_SOURCE_MODES, SHARED_CLASS_ID } from '../config/sharedClassSchedule'
+import { classScheduleRepository } from '../services/classScheduleRepository'
+import { waitForCentralPortalSession } from '../services/centralPortalFirebase'
 
 const STORAGE_KEY = 'classHelperWeeklyScheduleV1'
 const router = useRouter()
@@ -177,14 +180,26 @@ function loadSchedule() {
 }
 
 const now = ref(new Date())
-const scheduleData = ref(loadSchedule())
+const isCentralScheduleMode = SCHEDULE_SOURCE_MODE === SCHEDULE_SOURCE_MODES.CENTRAL
+const scheduleData = ref(isCentralScheduleMode ? makeDefaultData() : loadSchedule())
 const customNow = ref('')
 const customDay = ref('')
 const showTestTools = ref(false)
 let timer = null
 
-function refreshSchedule() {
-  scheduleData.value = loadSchedule()
+async function refreshSchedule() {
+  if (!isCentralScheduleMode) {
+    scheduleData.value = loadSchedule()
+    return
+  }
+  try {
+    const user = await waitForCentralPortalSession()
+    if (!user) return
+    const loaded = await classScheduleRepository.loadClassSchedule(SHARED_CLASS_ID)
+    scheduleData.value = normalizeData(loaded || makeDefaultData())
+  } catch (error) {
+    if (import.meta.env.DEV) console.error('[class-helper status] shared schedule load failed', error)
+  }
 }
 
 function handleVisibilityChange() {
@@ -193,9 +208,11 @@ function handleVisibilityChange() {
 
 onMounted(() => {
   timer = window.setInterval(() => { now.value = new Date() }, 1000)
+  refreshSchedule()
   window.addEventListener('storage', refreshSchedule)
   window.addEventListener('focus', refreshSchedule)
   window.addEventListener('class-helper-schedule-updated', refreshSchedule)
+  window.addEventListener('class-helper-central-schedule-updated', refreshSchedule)
   document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
@@ -204,6 +221,7 @@ onUnmounted(() => {
   window.removeEventListener('storage', refreshSchedule)
   window.removeEventListener('focus', refreshSchedule)
   window.removeEventListener('class-helper-schedule-updated', refreshSchedule)
+  window.removeEventListener('class-helper-central-schedule-updated', refreshSchedule)
   document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 

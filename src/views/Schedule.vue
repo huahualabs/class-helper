@@ -1,7 +1,10 @@
 <script setup>
 // ✅ HUA_SUBJECT_TOOL_UNIFORM_SIZE_20260711：科目分類框與科目按鍵統一尺寸，長科目名稱也能穩定置中顯示。
 // ✅ HUA_SCHEDULE_IOS_TIME_FIT_20260712：修正 iPhone Safari 作息起訖與快速設定時間欄超出卡片。
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { SCHEDULE_SOURCE_MODE, SCHEDULE_SOURCE_MODES, SHARED_CLASS_ID } from '../config/sharedClassSchedule'
+import { classScheduleRepository } from '../services/classScheduleRepository'
+import { signInCentralPortalTeacher, waitForCentralPortalSession } from '../services/centralPortalFirebase'
 
 const STORAGE_KEY = 'classHelperWeeklyScheduleV1'
 
@@ -223,11 +226,16 @@ function currentDayKey() {
   return days.find(day => day.dayIndex === new Date().getDay())?.key || 'mon'
 }
 
-const data = ref(loadSchedule())
+const isCentralMode = SCHEDULE_SOURCE_MODE === SCHEDULE_SOURCE_MODES.CENTRAL
+const data = ref(isCentralMode ? makeDefaultData() : loadSchedule())
 const activeTab = ref('week')
 const mobileDay = ref(currentDayKey())
 const selected = ref({ dayKey: currentDayKey(), periodId: data.value.periods[0]?.id || '' })
-const savedText = ref('已自動儲存')
+const savedText = ref(isCentralMode ? '正在載入共享課表…' : '已自動儲存')
+const centralReady = ref(!isCentralMode)
+const centralState = ref(isCentralMode ? 'loading' : 'ready')
+const centralMessage = ref('')
+const hydratingCentralSchedule = ref(false)
 const showQuickSetup = ref(false)
 const showHalfDaySettings = ref(false)
 const isEditingTimetable = ref(false)
@@ -252,13 +260,79 @@ let saveTimer = null
 
 watch(data, value => {
   window.clearTimeout(saveTimer)
+  if (isCentralMode && (!centralReady.value || hydratingCentralSchedule.value)) return
   savedText.value = '儲存中…'
-  saveTimer = window.setTimeout(() => {
+  saveTimer = window.setTimeout(async () => {
+    if (isCentralMode) {
+      try {
+        await classScheduleRepository.saveClassSchedule(SHARED_CLASS_ID, value)
+        window.dispatchEvent(new CustomEvent('class-helper-central-schedule-updated'))
+        centralState.value = 'ready'
+        centralMessage.value = '共享課表已儲存。'
+        savedText.value = `已儲存至中央 ${new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false })}`
+      } catch (error) {
+        centralState.value = 'save-failed'
+        centralMessage.value = '課表儲存失敗，請稍後再試。'
+        savedText.value = '儲存失敗'
+        if (import.meta.env.DEV) console.error('[class-helper schedule] save failed', error)
+      }
+      return
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
     window.dispatchEvent(new CustomEvent('class-helper-schedule-updated'))
     savedText.value = `已自動儲存 ${new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false })}`
   }, 250)
 }, { deep: true })
+
+async function loadCentralSchedule() {
+  if (!isCentralMode) return
+  centralReady.value = false
+  centralState.value = 'loading'
+  centralMessage.value = '正在載入中央共享課表…'
+  savedText.value = '正在載入共享課表…'
+  try {
+    const user = await waitForCentralPortalSession()
+    if (!user) {
+      centralState.value = 'auth-required'
+      centralMessage.value = '請先登入中央班級平台教師帳號。'
+      savedText.value = '需要登入'
+      return
+    }
+    const loaded = await classScheduleRepository.loadClassSchedule(SHARED_CLASS_ID)
+    hydratingCentralSchedule.value = true
+    data.value = normalizeData(loaded || makeDefaultData())
+    selected.value = { dayKey: currentDayKey(), periodId: data.value.periods[0]?.id || '' }
+    centralReady.value = true
+    centralState.value = 'ready'
+    centralMessage.value = loaded ? '已載入中央共享課表。' : '尚未建立共享課表，首次編輯後會建立。'
+    savedText.value = loaded ? '已載入中央共享課表' : '尚未建立共享課表'
+  } catch (error) {
+    const permissionDenied = error?.code === 'permission-denied' || String(error?.message || '').includes('權限')
+    centralState.value = permissionDenied ? 'permission' : 'load-failed'
+    centralMessage.value = permissionDenied
+      ? `目前帳號沒有 ${SHARED_CLASS_ID} 的教師權限。`
+      : '暫時無法載入共享課表，請稍後再試。'
+    savedText.value = '載入失敗'
+    if (import.meta.env.DEV) console.error('[class-helper schedule] load failed', error)
+  } finally {
+    hydratingCentralSchedule.value = false
+  }
+}
+
+async function loginCentralSchedule() {
+  centralState.value = 'loading'
+  centralMessage.value = '正在登入中央班級平台…'
+  try {
+    await signInCentralPortalTeacher()
+    await loadCentralSchedule()
+  } catch (error) {
+    centralState.value = 'auth-required'
+    centralMessage.value = '登入失敗，請稍後再試。'
+    if (import.meta.env.DEV) console.error('[class-helper schedule] sign in failed', error)
+  }
+}
+
+onMounted(loadCentralSchedule)
 
 const selectedDay = computed(() => days.find(day => day.key === selected.value.dayKey) || days[0])
 const selectedPeriod = computed(() => data.value.periods.find(period => period.id === selected.value.periodId) || data.value.periods[0])
@@ -736,13 +810,19 @@ function getStatusFor(dayKey, minute) {
       <span class="schedule-save-state">{{ savedText }}</span>
     </div>
 
-    <div class="schedule-tabs" role="tablist" aria-label="課表設定頁籤">
+    <section v-if="isCentralMode" class="card compact-card central-schedule-state" :data-state="centralState">
+      <div><strong>中央共享課表 · {{ SHARED_CLASS_ID }}</strong><p>{{ centralMessage }}</p></div>
+      <button v-if="centralState === 'auth-required'" type="button" @click="loginCentralSchedule">登入中央教師帳號</button>
+      <button v-else-if="centralState === 'load-failed' || centralState === 'permission'" type="button" @click="loadCentralSchedule">重新載入</button>
+    </section>
+
+    <div v-if="!isCentralMode || centralReady" class="schedule-tabs" role="tablist" aria-label="課表設定頁籤">
       <button type="button" :class="{ active: activeTab === 'week' }" @click="activeTab = 'week'">本週課表</button>
       <button type="button" :class="{ active: activeTab === 'times' }" @click="activeTab = 'times'">作息時間</button>
       <button type="button" :class="{ active: activeTab === 'preview' }" @click="activeTab = 'preview'">狀態預覽</button>
     </div>
 
-    <template v-if="activeTab === 'week'">
+    <template v-if="(!isCentralMode || centralReady) && activeTab === 'week'">
       <section class="half-day-collapsible">
         <button
           type="button"
@@ -966,7 +1046,7 @@ function getStatusFor(dayKey, minute) {
       </section>
     </template>
 
-    <template v-else-if="activeTab === 'times'">
+    <template v-else-if="(!isCentralMode || centralReady) && activeTab === 'times'">
       <section class="card compact-card quick-setup-card">
         <div class="schedule-card-head">
           <div>
@@ -1062,7 +1142,7 @@ function getStatusFor(dayKey, minute) {
       </section>
     </template>
 
-    <template v-else>
+    <template v-else-if="!isCentralMode || centralReady">
       <section class="card compact-card status-preview-settings">
         <div class="schedule-card-head">
           <div>
@@ -1108,6 +1188,9 @@ function getStatusFor(dayKey, minute) {
 .weekly-schedule-page { display: flex; flex-direction: column; gap: 14px; }
 .schedule-title-row { align-items: center; margin-bottom: 0; }
 .schedule-save-state { flex: 0 0 auto; padding: 8px 12px; border-radius: 999px; background: #edf8f2; color: #2f6f57; font-size: 13px; font-weight: 900; }
+.central-schedule-state { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.central-schedule-state p { margin: 4px 0 0; color: #667085; }
+.central-schedule-state[data-state="save-failed"], .central-schedule-state[data-state="load-failed"], .central-schedule-state[data-state="permission"] { border-color: #efc7bf; background: #fff8f6; }
 .schedule-tabs { display: inline-flex; align-self: flex-start; gap: 6px; padding: 5px; border-radius: 16px; background: #eaf4ef; }
 .schedule-tabs button { padding: 9px 18px; border-radius: 12px; background: transparent; color: #567064; }
 .schedule-tabs button.active { background: #fff; color: #2f6f57; box-shadow: 0 4px 14px rgba(47,111,87,.12); }
@@ -1343,4 +1426,3 @@ function getStatusFor(dayKey, minute) {
   }
 }
 </style>
-
