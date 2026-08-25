@@ -3,7 +3,13 @@
 // ✅ HUA_SCHEDULE_IOS_TIME_FIT_20260712：修正 iPhone Safari 作息起訖與快速設定時間欄超出卡片。
 import { computed, onMounted, ref, watch } from 'vue'
 import ScheduleImportPanel from '@owner-schedule-import'
-import { SCHEDULE_IMPORT_ENABLED, SCHEDULE_SOURCE_MODE, SCHEDULE_SOURCE_MODES, SHARED_CLASS_ID } from '../config/sharedClassSchedule'
+import {
+  REQUIRE_EXISTING_CENTRAL_SCHEDULE,
+  SCHEDULE_IMPORT_ENABLED,
+  SCHEDULE_SOURCE_MODE,
+  SCHEDULE_SOURCE_MODES,
+  SHARED_CLASS_ID,
+} from '../config/sharedClassSchedule'
 import { classScheduleRepository } from '@owner-class-schedule-repository'
 import { createLatestScheduleSaveQueue } from '../services/latestScheduleSaveQueue'
 import { signInCentralPortalTeacher, waitForCentralPortalSession } from '@owner-central-firebase'
@@ -304,6 +310,12 @@ async function loadCentralSchedule() {
       return
     }
     const loaded = await classScheduleRepository.loadClassSchedule(SHARED_CLASS_ID)
+    if (!loaded && REQUIRE_EXISTING_CENTRAL_SCHEDULE) {
+      centralState.value = 'empty'
+      centralMessage.value = '共享課表尚未完成匯入；中央模式不會建立或覆蓋預設課表。'
+      savedText.value = '等待共享課表匯入'
+      return
+    }
     hydratingCentralSchedule.value = true
     data.value = normalizeData(loaded || makeDefaultData())
     selected.value = { dayKey: currentDayKey(), periodId: data.value.periods[0]?.id || '' }

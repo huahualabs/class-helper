@@ -27,6 +27,14 @@ export function isScheduleImportEnabled(env = import.meta.env) {
   return isolatedEmulator || explicitProductionImport
 }
 
+export function requiresExistingCentralSchedule(env = import.meta.env) {
+  return env.VITE_CLASS_HELPER_DEPLOYMENT_PROFILE === 'owner-parent-portal'
+    && Boolean(env.PROD)
+    && env.VITE_SHARED_SCHEDULE_SOURCE_MODE === 'central'
+    && env.VITE_ENABLE_OWNER_CENTRAL_PRODUCTION === 'true'
+}
+
 // This flag controls only the one-time import flow. It does not enable the
 // normal central schedule/calendar source modes or relax their Emulator guard.
 export const SCHEDULE_IMPORT_ENABLED = OWNER_PARENT_PORTAL_ENABLED && isScheduleImportEnabled()
+export const REQUIRE_EXISTING_CENTRAL_SCHEDULE = requiresExistingCentralSchedule()

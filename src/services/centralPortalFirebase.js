@@ -24,22 +24,34 @@ export function resolveCentralPortalConfig(env = import.meta.env) {
   if (!ownerEnabled) {
     throw new Error('安全停止：generic class-helper 不可初始化 owner central integration。')
   }
-  const useEmulators = Boolean(env.DEV) && env.VITE_CENTRAL_USE_FIREBASE_EMULATORS === 'true'
+  const classId = requiredEnv('VITE_CENTRAL_PORTAL_CLASS_ID', env)
+  const emulatorRequested = env.VITE_CENTRAL_USE_FIREBASE_EMULATORS === 'true'
+  if (emulatorRequested && !env.DEV) {
+    throw new Error('安全停止：production build 不可使用 Emulator 設定。')
+  }
+  const useEmulators = Boolean(env.DEV) && emulatorRequested
   const centralCalendarEnabled = env.VITE_SHARED_CALENDAR_SOURCE_MODE === 'central'
   const centralScheduleEnabled = env.VITE_SHARED_SCHEDULE_SOURCE_MODE === 'central'
-  if ((centralCalendarEnabled || centralScheduleEnabled) && !useEmulators) {
-    throw new Error('安全停止：中央共享資料目前只允許連線到中央 Firebase Emulator。')
+  const scheduleImportEnabled = env.VITE_ENABLE_PRODUCTION_SCHEDULE_IMPORT === 'true'
+  const centralFeatureRequested = centralCalendarEnabled || centralScheduleEnabled || scheduleImportEnabled
+  if (!useEmulators) {
+    if (!centralFeatureRequested) {
+      throw new Error('安全停止：owner central integration 尚未選擇明確功能來源。')
+    }
+    if (env.VITE_ENABLE_OWNER_CENTRAL_PRODUCTION !== 'true') {
+      throw new Error('安全停止：owner central production 尚未經明確啟用。')
+    }
   }
   return {
+    classId,
     useEmulators,
+    ownerProductionEnabled: !useEmulators,
     firebase: {
       apiKey: useEmulators ? 'demo-api-key' : requiredEnv('VITE_CENTRAL_FIREBASE_API_KEY', env),
       authDomain: useEmulators ? 'localhost' : requiredEnv('VITE_CENTRAL_FIREBASE_AUTH_DOMAIN', env),
       projectId: useEmulators
         ? (env.VITE_CENTRAL_FIREBASE_EMULATOR_PROJECT_ID || 'demo-class-helper-class-events')
         : requiredEnv('VITE_CENTRAL_FIREBASE_PROJECT_ID', env),
-      storageBucket: useEmulators ? 'demo.invalid' : requiredEnv('VITE_CENTRAL_FIREBASE_STORAGE_BUCKET', env),
-      messagingSenderId: useEmulators ? '000000000000' : requiredEnv('VITE_CENTRAL_FIREBASE_MESSAGING_SENDER_ID', env),
       appId: useEmulators ? '1:000000000000:web:class-helper-central' : requiredEnv('VITE_CENTRAL_FIREBASE_APP_ID', env),
     },
   }

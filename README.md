@@ -43,11 +43,17 @@ npm run build
 
 Owner integration 的 Emulator scripts 會明確啟用 owner profile，且使用獨立 Auth／Firestore ports。不要將 Emulator env 帶入 generic production build，也不要使用未指定 profile 與 target 的部署命令。
 
+Owner production 使用獨立 mode：將 `.env.parent-portal-integration.example` 複製為 gitignored 的 `.env.owner-production.local`，再執行 `npm run build:owner`。Generic GitHub Pages 仍執行預設 `npm run build`，不會讀取 owner mode env。
+
+共享課表上線必須依序維持三個人工階段：先以 `legacy` 顯示舊課表且 import flag 關閉；另次批准後短暫打開 import flag 並完成 read-back；最後才把 schedule source 改成 `central` 並重新 build。Production central schedule 若找不到 canonical document，會停止編輯，不會以預設課表建立或覆蓋資料。
+
 ## Deployment safety
 
 - Generic public build 只使用 `VITE_CLASS_HELPER_DEPLOYMENT_PROFILE=generic`。
 - Owner integration 使用獨立 deployment env 與人工確認流程。
+- Owner production 還必須明確設定 `VITE_ENABLE_OWNER_CENTRAL_PRODUCTION=true`；此 flag 不會啟用 schedule migration。
 - 不可使用 naked `firebase deploy`。
 - 不可把 owner project ID、class ID、UID 或 production migration flag 加入 generic env 範本。
-- 本 repository 目前沒有共用 Firebase Hosting target；發布前必須另外確認實際 Hosting site 與 `VITE_CLASS_HELPER_BASE_PATH`。
+- `firebase.json` 只描述 owner 的 `class-helper-2026` Hosting site；generic GitHub Pages workflow 不使用它。
 - 任何 owner central production guard 調整、schedule migration 或 production write 都必須另案人工確認。
+- Generic 分享版由 GitHub Pages `/class-helper/` 發布；owner Firebase Hosting 使用 `class-helper-2026` site 與 `/` base。兩者不可互相覆蓋。
