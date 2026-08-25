@@ -1,20 +1,52 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import {
+  CALENDAR_SOURCE_MODE,
+  CALENDAR_SOURCE_MODES,
+  SHARED_CLASS_ID,
+} from '../config/sharedClassEvents'
+import {
+  signInCentralPortalTeacher,
+  waitForCentralPortalSession,
+} from '../services/centralPortalFirebase'
+import { classEventsRepository } from '../services/classEventsRepository'
+import {
+  composeClassEventTime,
+  formatClassEventTime,
+  parseClassEventTime,
+  validateClassEventTimes,
+} from '../utils/classEventTime'
 
 const viewMode = ref(localStorage.getItem('calendarViewMode') || 'month')
 const currentDate = ref(new Date())
 const selectedDate = ref(toDateKey(new Date()))
 const eventDraft = ref('')
-
-const savedEvents = ref(loadEvents())
+const isCentralMode = CALENDAR_SOURCE_MODE === CALENDAR_SOURCE_MODES.CENTRAL
+const savedEvents = ref(isCentralMode ? {} : loadEvents())
+const centralEvents = ref([])
+const loading = ref(isCentralMode)
+const signingIn = ref(false)
+const saving = ref(false)
+const authRequired = ref(false)
+const permissionDenied = ref(false)
+const loadFailed = ref(false)
+const saveMessage = ref('')
+const editingEventId = ref('')
+const editForm = ref(emptyEditForm())
+const timeParts = ref(emptyTimeParts())
+const timeRangeMessage = ref('')
+const hourOptions = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'))
+const standardMinuteOptions = Array.from({ length: 12 }, (_, index) => String(index * 5).padStart(2, '0'))
 
 watch(viewMode, value => {
   localStorage.setItem('calendarViewMode', value)
 })
 
-watch(savedEvents, value => {
-  localStorage.setItem('classHelperCalendarEvents', JSON.stringify(value))
-}, { deep: true })
+if (!isCentralMode) {
+  watch(savedEvents, value => {
+    localStorage.setItem('classHelperCalendarEvents', JSON.stringify(value))
+  }, { deep: true })
+}
 
 const weekLabelsMonth = ['日', '一', '二', '三', '四', '五', '六']
 const weekLabelsWeek = ['一', '二', '三', '四', '五', '六', '日']
@@ -128,6 +160,13 @@ const selectedDayInfo = computed(() => {
   return createDayInfo(date, date.getMonth())
 })
 
+const centralEventsByDate = computed(() => centralEvents.value.reduce((groups, event) => {
+  if (typeof event?.date !== 'string') return groups
+  if (!groups[event.date]) groups[event.date] = []
+  groups[event.date].push(event)
+  return groups
+}, {}))
+
 function loadEvents() {
   try {
     return JSON.parse(localStorage.getItem('classHelperCalendarEvents') || '{}')
@@ -169,7 +208,15 @@ function createDayInfo(date, currentMonth) {
     ...(solarTerms2026[key] || [])
   ]
 
-  const custom = savedEvents.value[key] || []
+  const custom = isCentralMode
+    ? (centralEventsByDate.value[key] || [])
+    : (savedEvents.value[key] || []).map((title, index) => ({
+        eventId: `legacy-${key}-${index}`,
+        title,
+        date: key,
+        legacyIndex: index,
+        published: false,
+      }))
 
   return {
     date,
@@ -182,7 +229,7 @@ function createDayInfo(date, currentMonth) {
     isSaturday: date.getDay() === 6,
     builtIn,
     custom,
-    allEvents: [...builtIn, ...custom]
+    allEvents: [...builtIn, ...custom.map(event => event.title)]
   }
 }
 
@@ -211,24 +258,244 @@ function selectDate(day) {
   currentDate.value = new Date(day.date)
 }
 
-function addEvent() {
+function emptyEditForm() {
+  return {
+    title: '',
+    date: '',
+    startTime: '',
+    endTime: '',
+    category: '',
+    location: '',
+    description: '',
+    published: false,
+  }
+}
+
+function emptyTimeParts() {
+  return {
+    startTime: { hour: '', minute: '' },
+    endTime: { hour: '', minute: '' },
+  }
+}
+
+function logDiagnostic(context, error) {
+  if (import.meta.env.DEV) console.error(`[central classEvents] ${context}`, error)
+}
+
+function isPermissionError(error) {
+  return error?.code === 'permission-denied'
+    || String(error?.message || '').includes('沒有此班級的教師權限')
+}
+
+function resetCentralStatus() {
+  authRequired.value = false
+  permissionDenied.value = false
+  loadFailed.value = false
+}
+
+async function refreshCentralEvents() {
+  const user = await waitForCentralPortalSession()
+  if (!user) {
+    centralEvents.value = []
+    authRequired.value = true
+    return false
+  }
+
+  await classEventsRepository.verifyTeacherAccess(SHARED_CLASS_ID)
+  centralEvents.value = await classEventsRepository.listClassEvents(SHARED_CLASS_ID)
+  return true
+}
+
+async function initializeCentralCalendar() {
+  if (!isCentralMode) return
+  loading.value = true
+  resetCentralStatus()
+  try {
+    await refreshCentralEvents()
+  } catch (error) {
+    if (isPermissionError(error)) permissionDenied.value = true
+    else loadFailed.value = true
+    logDiagnostic('load failed', error)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function loginCentralTeacher() {
+  // Start the popup synchronously from the click event for Safari compatibility.
+  signingIn.value = true
+  resetCentralStatus()
+  try {
+    const signInAttempt = signInCentralPortalTeacher()
+    await signInAttempt
+    loading.value = true
+    await refreshCentralEvents()
+  } catch (error) {
+    if (isPermissionError(error)) permissionDenied.value = true
+    else loadFailed.value = true
+    logDiagnostic('sign in failed', error)
+  } finally {
+    signingIn.value = false
+    loading.value = false
+  }
+}
+
+async function runCentralSave(action, context) {
+  saving.value = true
+  saveMessage.value = ''
+  try {
+    await action()
+    await refreshCentralEvents()
+    return true
+  } catch (error) {
+    saveMessage.value = '儲存失敗，請稍後再試。'
+    if (isPermissionError(error)) permissionDenied.value = true
+    logDiagnostic(context, error)
+    return false
+  } finally {
+    saving.value = false
+  }
+}
+
+async function addEvent() {
   const text = eventDraft.value.trim()
   if (!text) return
 
   const key = selectedDate.value
-  if (!savedEvents.value[key]) savedEvents.value[key] = []
+  if (!isCentralMode) {
+    if (!savedEvents.value[key]) savedEvents.value[key] = []
+    savedEvents.value[key].push(text)
+    eventDraft.value = ''
+    return
+  }
 
-  savedEvents.value[key].push(text)
-  eventDraft.value = ''
+  const saved = await runCentralSave(
+    () => classEventsRepository.createClassEvent(SHARED_CLASS_ID, { title: text, date: key }),
+    'create failed',
+  )
+  if (saved) eventDraft.value = ''
 }
 
-function removeEvent(index) {
-  const key = selectedDate.value
-  savedEvents.value[key].splice(index, 1)
-  if (savedEvents.value[key].length === 0) {
-    delete savedEvents.value[key]
+function startEdit(event) {
+  editingEventId.value = event.eventId
+  editForm.value = {
+    ...emptyEditForm(),
+    ...Object.fromEntries(
+      Object.keys(emptyEditForm()).map(field => [field, event[field] ?? emptyEditForm()[field]]),
+    ),
+  }
+  timeParts.value = emptyTimeParts()
+  hydrateTimeParts('startTime', event.startTime)
+  hydrateTimeParts('endTime', event.endTime)
+  resetTimeValidation()
+}
+
+function cancelEdit() {
+  editingEventId.value = ''
+  editForm.value = emptyEditForm()
+  timeParts.value = emptyTimeParts()
+  resetTimeValidation()
+}
+
+async function saveEdit() {
+  if (!editingEventId.value || !editForm.value.title.trim() || !editForm.value.date) return
+  const timeValidation = validateClassEventTimes(editForm.value.startTime, editForm.value.endTime)
+  if (!timeValidation.valid) {
+    timeRangeMessage.value = timeValidation.message
+    return
+  }
+  const eventId = editingEventId.value
+  const payload = {
+    ...editForm.value,
+    title: editForm.value.title.trim(),
+    startTime: timeValidation.startTime,
+    endTime: timeValidation.endTime,
+  }
+  const saved = await runCentralSave(
+    () => classEventsRepository.updateClassEvent(eventId, payload),
+    'update failed',
+  )
+  if (saved) {
+    selectedDate.value = payload.date
+    cancelEdit()
   }
 }
+
+function resetTimeValidation() {
+  timeRangeMessage.value = ''
+}
+
+function updateTimeRangeMessage() {
+  const validation = validateClassEventTimes(editForm.value.startTime, editForm.value.endTime)
+  timeRangeMessage.value = validation.valid ? '' : validation.message
+}
+
+function hydrateTimeParts(field, value) {
+  const parsed = parseClassEventTime(value)
+  if (!parsed) {
+    editForm.value[field] = ''
+    return
+  }
+  timeParts.value[field] = { ...parsed }
+  editForm.value[field] = value
+}
+
+function minuteOptionsFor(field) {
+  const existingMinute = timeParts.value[field].minute
+  return [...new Set([...standardMinuteOptions, existingMinute].filter(Boolean))].sort()
+}
+
+function updateTimePart(field, part, value) {
+  if (value === '') {
+    timeParts.value[field] = { hour: '', minute: '' }
+    editForm.value[field] = ''
+    updateTimeRangeMessage()
+    return
+  }
+
+  timeParts.value[field][part] = value
+  if (!timeParts.value[field].hour) timeParts.value[field].hour = '00'
+  if (!timeParts.value[field].minute) timeParts.value[field].minute = '00'
+  editForm.value[field] = composeClassEventTime(
+    timeParts.value[field].hour,
+    timeParts.value[field].minute,
+  )
+  updateTimeRangeMessage()
+}
+
+async function togglePublished(event) {
+  await runCentralSave(
+    () => classEventsRepository.updateClassEvent(event.eventId, { published: !event.published }),
+    event.published ? 'unpublish failed' : 'publish failed',
+  )
+}
+
+async function removeEvent(event) {
+  if (!window.confirm(`確定刪除「${event.title}」嗎？`)) return
+
+  if (!isCentralMode) {
+    const key = event.date
+    savedEvents.value[key].splice(event.legacyIndex, 1)
+    if (savedEvents.value[key].length === 0) delete savedEvents.value[key]
+    return
+  }
+
+  const deleted = await runCentralSave(
+    () => classEventsRepository.deleteClassEvent(event.eventId),
+    'delete failed',
+  )
+  if (deleted && editingEventId.value === event.eventId) cancelEdit()
+}
+
+function eventTimeLabel(event) {
+  if (!event.startTime && !event.endTime) return ''
+  return [event.startTime, event.endTime]
+    .filter(Boolean)
+    .map(time => formatClassEventTime(time))
+    .join('–')
+}
+
+onMounted(initializeCentralCalendar)
 </script>
 
 <template>
@@ -237,6 +504,9 @@ function removeEvent(index) {
       <div>
         <h2>🗓️ 行事曆</h2>
         <p>月曆從週日開始，週曆從週一開始。節日、節氣與自訂事項會一起顯示。</p>
+        <p class="source-mode" data-testid="calendar-source-mode">
+          {{ isCentralMode ? `中央共享行事曆 · ${SHARED_CLASS_ID}` : 'Legacy local rollback mode' }}
+        </p>
       </div>
 
       <div class="mode-switch">
@@ -334,21 +604,71 @@ function removeEvent(index) {
       <aside class="detail-panel">
         <h3>📌 {{ selectedDate }}</h3>
 
+        <div v-if="isCentralMode && loading" class="state-box" data-testid="calendar-loading">
+          正在載入共享行事曆…
+        </div>
+
+        <div v-else-if="isCentralMode && authRequired" class="state-box" data-testid="calendar-auth-required">
+          <p>請先登入中央班級平台教師帳號，才能管理共享行事曆。</p>
+          <button :disabled="signingIn" @click="loginCentralTeacher">
+            {{ signingIn ? '登入中…' : '教師登入' }}
+          </button>
+        </div>
+
+        <div v-else-if="isCentralMode && permissionDenied" class="state-box error" data-testid="calendar-permission-denied">
+          <p>目前帳號沒有 {{ SHARED_CLASS_ID }} 的教師權限。</p>
+          <button :disabled="signingIn" @click="loginCentralTeacher">改用 Emulator 測試教師登入</button>
+        </div>
+
+        <div v-else-if="isCentralMode && loadFailed" class="state-box error" data-testid="calendar-load-failed">
+          <p>暫時無法載入共享行事曆，請稍後再試。</p>
+          <button @click="initializeCentralCalendar">重新載入</button>
+        </div>
+
         <div v-if="selectedDayInfo.builtIn.length" class="built-in-box">
           <h4>節日／節氣</h4>
           <p v-for="event in selectedDayInfo.builtIn" :key="event">🌼 {{ event }}</p>
         </div>
 
-        <div class="custom-box">
+        <div
+          v-if="!isCentralMode || (!loading && !authRequired && !permissionDenied && !loadFailed)"
+          class="custom-box"
+        >
           <h4>手動事項</h4>
 
+          <p v-if="!isCentralMode" class="rollback-note">
+            目前使用保留的本機 rollback 資料；不會與中央行事曆合併或雙寫。
+          </p>
+
+          <p v-if="saveMessage" class="save-error" data-testid="calendar-save-failed">
+            {{ saveMessage }}
+          </p>
+
           <div
-            v-for="(event, index) in selectedDayInfo.custom"
-            :key="event + index"
+            v-for="event in selectedDayInfo.custom"
+            :key="event.eventId"
             class="custom-event"
+            :data-event-id="event.eventId"
           >
-            <span>{{ event }}</span>
-            <button @click="removeEvent(index)">刪除</button>
+            <div class="event-summary">
+              <strong>{{ event.title }}</strong>
+              <small v-if="eventTimeLabel(event)">{{ eventTimeLabel(event) }}</small>
+              <span v-if="isCentralMode" class="status-chip" :class="{ published: event.published }">
+                {{ event.published ? '已發布' : '草稿' }}
+              </span>
+            </div>
+            <div class="event-actions">
+              <button v-if="isCentralMode" class="neutral" @click="startEdit(event)">編輯</button>
+              <button
+                v-if="isCentralMode"
+                class="publish"
+                :disabled="saving"
+                @click="togglePublished(event)"
+              >
+                {{ event.published ? '取消發布' : '發布' }}
+              </button>
+              <button :disabled="saving" @click="removeEvent(event)">刪除</button>
+            </div>
           </div>
 
           <p v-if="selectedDayInfo.custom.length === 0" class="empty-text">
@@ -361,8 +681,87 @@ function removeEvent(index) {
               placeholder="例如：校外教學、數學考試、交回條"
               @keyup.enter="addEvent"
             />
-            <button @click="addEvent">新增</button>
+            <button :disabled="saving" data-testid="calendar-create" @click="addEvent">
+              {{ saving ? '儲存中…' : '新增草稿' }}
+            </button>
           </div>
+
+          <form
+            v-if="isCentralMode && editingEventId"
+            class="edit-form"
+            data-testid="calendar-edit-form"
+            @submit.prevent="saveEdit"
+          >
+            <h4>編輯事件</h4>
+            <label>標題<input v-model="editForm.title" required /></label>
+            <div class="datetime-card" data-testid="calendar-datetime-card">
+              <label class="date-row">
+                <span>日期</span>
+                <input v-model="editForm.date" type="date" required />
+              </label>
+              <div class="time-fields-row">
+                <div class="compact-time-group" data-testid="calendar-start-group">
+                  <strong>開始</strong>
+                  <select
+                    :value="timeParts.startTime.hour"
+                    aria-label="開始時間 小時"
+                    data-testid="calendar-start-hour"
+                    @change="updateTimePart('startTime', 'hour', $event.currentTarget.value)"
+                  >
+                    <option value="">未設定</option>
+                    <option v-for="hour in hourOptions" :key="hour" :value="hour">{{ hour }}</option>
+                  </select>
+                  <span>時</span>
+                  <select
+                    :value="timeParts.startTime.minute"
+                    aria-label="開始時間 分鐘"
+                    data-testid="calendar-start-minute"
+                    @change="updateTimePart('startTime', 'minute', $event.currentTarget.value)"
+                  >
+                    <option value="">未設定</option>
+                    <option v-for="minute in minuteOptionsFor('startTime')" :key="minute" :value="minute">{{ minute }}</option>
+                  </select>
+                  <span>分</span>
+                </div>
+                <div class="compact-time-group" data-testid="calendar-end-group">
+                  <strong>結束</strong>
+                  <select
+                    :value="timeParts.endTime.hour"
+                    aria-label="結束時間 小時"
+                    data-testid="calendar-end-hour"
+                    @change="updateTimePart('endTime', 'hour', $event.currentTarget.value)"
+                  >
+                    <option value="">未設定</option>
+                    <option v-for="hour in hourOptions" :key="hour" :value="hour">{{ hour }}</option>
+                  </select>
+                  <span>時</span>
+                  <select
+                    :value="timeParts.endTime.minute"
+                    aria-label="結束時間 分鐘"
+                    data-testid="calendar-end-minute"
+                    @change="updateTimePart('endTime', 'minute', $event.currentTarget.value)"
+                  >
+                    <option value="">未設定</option>
+                    <option v-for="minute in minuteOptionsFor('endTime')" :key="minute" :value="minute">{{ minute }}</option>
+                  </select>
+                  <span>分</span>
+                </div>
+              </div>
+            </div>
+            <p v-if="timeRangeMessage" class="field-error" data-testid="calendar-time-error">
+              {{ timeRangeMessage }}
+            </p>
+            <label>分類<input v-model="editForm.category" /></label>
+            <label>地點<input v-model="editForm.location" /></label>
+            <label>說明<textarea v-model="editForm.description" rows="3"></textarea></label>
+            <label class="publish-check">
+              <input v-model="editForm.published" type="checkbox" /> 已發布（家長平台未來可見）
+            </label>
+            <div class="form-actions">
+              <button type="button" class="neutral" @click="cancelEdit">取消</button>
+              <button type="submit" :disabled="saving">{{ saving ? '儲存中…' : '儲存' }}</button>
+            </div>
+          </form>
         </div>
       </aside>
     </section>
@@ -390,6 +789,17 @@ function removeEvent(index) {
 .calendar-header p {
   color: #5b6472;
   margin: 0;
+}
+
+.calendar-header .source-mode {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #e8f4ee;
+  color: #2f6f57;
+  font-size: 12px;
+  font-weight: 850;
 }
 
 .mode-switch {
@@ -424,7 +834,7 @@ function removeEvent(index) {
 
 .calendar-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
+  grid-template-columns: minmax(0, 1fr) minmax(440px, 500px);
   gap: 14px;
   align-items: start;
 }
@@ -687,12 +1097,222 @@ function removeEvent(index) {
   margin-bottom: 8px;
 }
 
+.event-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  min-width: 0;
+}
+
+.event-summary strong {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.event-summary small {
+  color: #667085;
+}
+
+.status-chip {
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: #fff0c7;
+  color: #8a5700;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.status-chip.published {
+  background: #dff3ea;
+  color: #25634d;
+}
+
+.event-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
 .custom-event button {
   background: #e9897e;
   color: white;
   border: none;
   border-radius: 12px;
   padding: 8px 10px;
+}
+
+.custom-event button.neutral,
+.form-actions button.neutral {
+  background: #eef2f6;
+  color: #344054;
+}
+
+.custom-event button.publish {
+  background: #397d63;
+}
+
+.state-box {
+  margin-top: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  background: #eef8f3;
+  color: #315d4b;
+}
+
+.state-box.error,
+.save-error {
+  background: #fff0f0;
+  color: #9b2c2c;
+}
+
+.field-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff0f0;
+  color: #9b2c2c;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.state-box p,
+.save-error {
+  margin: 0 0 10px;
+}
+
+.state-box button,
+.form-actions button {
+  border: 0;
+  border-radius: 12px;
+  padding: 9px 12px;
+  background: #397d63;
+  color: white;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.rollback-note {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: #fff6d8;
+  color: #765600;
+  font-size: 12px;
+}
+
+.edit-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 2px solid #f0dfcc;
+}
+
+.edit-form h4 {
+  margin: 0;
+}
+
+.edit-form label {
+  display: grid;
+  gap: 4px;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.edit-form input,
+.edit-form select,
+.edit-form textarea {
+  min-width: 0;
+  border: 2px solid #dceee6;
+  border-radius: 11px;
+  padding: 9px;
+  font: inherit;
+}
+
+.datetime-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: #fffdf8;
+  border: 1px solid #eadfce;
+}
+
+.edit-form .date-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.date-row input {
+  width: min(180px, 100%);
+}
+
+.time-fields-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.compact-time-group {
+  display: grid;
+  grid-template-columns: auto minmax(58px, 1fr) auto minmax(58px, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.compact-time-group strong,
+.compact-time-group span {
+  color: #475467;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.compact-time-group select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 7px 5px;
+  background: white;
+}
+
+@media (max-width: 620px) {
+  .time-fields-row {
+    grid-template-columns: 1fr;
+  }
+
+  .datetime-card,
+  .compact-time-group {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+}
+
+.edit-form .publish-check {
+  display: flex;
+  align-items: center;
+}
+
+.edit-form .publish-check input {
+  width: auto;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: .6;
 }
 
 .add-row {
