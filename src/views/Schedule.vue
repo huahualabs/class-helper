@@ -13,6 +13,7 @@ import {
 import { classScheduleRepository } from '@owner-class-schedule-repository'
 import { createLatestScheduleSaveQueue } from '../services/latestScheduleSaveQueue'
 import { signInCentralPortalTeacher, waitForCentralPortalSession } from '@owner-central-firebase'
+import { attendancePeriodLabel } from '../domain/attendancePeriods'
 
 const STORAGE_KEY = 'classHelperWeeklyScheduleV1'
 
@@ -264,6 +265,10 @@ const quick = ref({
   afternoonBreakMinutes: 10,
   applyMode: 'preserve'
 })
+
+function displayPeriodLabel(period) {
+  return attendancePeriodLabel(period, data.value.periods)
+}
 let saveTimer = null
 const centralSaveQueue = createLatestScheduleSaveQueue(schedule => (
   classScheduleRepository.saveClassSchedule(SHARED_CLASS_ID, schedule)
@@ -359,6 +364,10 @@ const timeWarnings = computed(() => {
   const warnings = []
   const periods = data.value.periods
 
+  if (periods.filter((period) => period.kind === 'class').length > 7) {
+    warnings.push('正式課堂最多七節；超出的課堂不會取得節次編號，也不納入出缺席計算。')
+  }
+
   periods.forEach((period, index) => {
     const start = toMinutes(period.start)
     const end = toMinutes(period.end)
@@ -376,8 +385,8 @@ const timeWarnings = computed(() => {
 const quickPreview = computed(() => {
   const periods = []
   let current = toMinutes(quick.value.firstStart)
-  const morningCount = clampNumber(quick.value.morningCount, 1, 8)
-  const afternoonCount = clampNumber(quick.value.afternoonCount, 0, 8)
+  const morningCount = clampNumber(quick.value.morningCount, 1, 7)
+  const afternoonCount = clampNumber(quick.value.afternoonCount, 0, 7 - morningCount)
   const duration = clampNumber(quick.value.duration, 1, 120)
   const normalBreak = clampNumber(quick.value.breakMinutes, 0, 60)
   const longBreak = clampNumber(quick.value.longBreakMinutes, 0, 90)
@@ -450,7 +459,7 @@ function selectCell(dayKey, periodId) {
 
 function cellTitle(dayKey, period) {
   const entry = entryFor(dayKey, period.id)
-  return entry?.subject?.trim() || period.label
+  return entry?.subject?.trim() || displayPeriodLabel(period)
 }
 
 function entryDisplayIcon(entry, kind) {
@@ -744,8 +753,8 @@ function makeNextInfo(period, dayEntries) {
   if (!period) return null
   const entry = dayEntries[period.id] || defaultEntry(period.kind)
   return {
-    periodLabel: period.label,
-    title: entry.subject?.trim() || period.label,
+    periodLabel: displayPeriodLabel(period),
+    title: entry.subject?.trim() || displayPeriodLabel(period),
     icon: entryDisplayIcon(entry, period.kind),
     start: period.start
   }
@@ -767,12 +776,12 @@ function getStatusFor(dayKey, minute) {
   if (activeIndex >= 0) {
     const period = periods[activeIndex]
     const entry = dayEntries[period.id] || defaultEntry(period.kind)
-    const title = entry.subject?.trim() || period.label
+    const title = entry.subject?.trim() || displayPeriodLabel(period)
     return {
       mode: 'active', kind: period.kind,
       icon: entryDisplayIcon(entry, period.kind),
       title,
-      periodLabel: `${period.label}・${period.start}–${period.end}`,
+      periodLabel: `${displayPeriodLabel(period)}・${period.start}–${period.end}`,
       message: entry.message?.trim() || defaultMessage(period.kind, title),
       minutesLeft: Math.max(0, toMinutes(period.end) - minute),
       next: makeNextInfo(periods[activeIndex + 1], dayEntries)
@@ -869,7 +878,7 @@ function getStatusFor(dayKey, minute) {
               <label v-if="isHalfDay(day.key)" class="half-day-cutoff">
                 <span>上到</span>
                 <select v-model="data.halfDayCutoffs[day.key]" @change="ensureSelectionVisible">
-                  <option v-for="period in data.periods" :key="period.id" :value="period.id">{{ period.label }}</option>
+                  <option v-for="period in data.periods" :key="period.id" :value="period.id">{{ displayPeriodLabel(period) }}</option>
                 </select>
               </label>
             </div>
@@ -970,7 +979,7 @@ function getStatusFor(dayKey, minute) {
             :class="`period-kind-${period.kind}`"
           >
             <div class="period-cell">
-              <strong>{{ period.label }}</strong>
+              <strong>{{ displayPeriodLabel(period) }}</strong>
               <span>{{ period.start }}–{{ period.end }}</span>
             </div>
             <template v-for="day in days" :key="`${day.key}-${period.id}`">
@@ -1029,7 +1038,7 @@ function getStatusFor(dayKey, minute) {
               @click="handleCellClick(mobileDay, period)"
             >
               <span class="mobile-period-time">{{ period.start }}–{{ period.end }}</span>
-              <span class="mobile-period-name">{{ period.label }}</span>
+              <span class="mobile-period-name">{{ displayPeriodLabel(period) }}</span>
               <strong>{{ cellIcon(mobileDay, period) }} {{ cellTitle(mobileDay, period) }}</strong>
               <small v-if="isEditingTimetable && period.kind === 'class'">
                 {{ selectedSubjectTool ? '點一下填入科目' : '請先從上方選科目' }}
@@ -1042,7 +1051,7 @@ function getStatusFor(dayKey, minute) {
       <section v-if="selectedPeriod && selectedEntry" class="card compact-card schedule-detail-card">
         <div class="schedule-detail-heading">
           <div>
-            <span>{{ selectedDay.label }}・{{ selectedPeriod.label }}</span>
+            <span>{{ selectedDay.label }}・{{ displayPeriodLabel(selectedPeriod) }}</span>
             <h3>{{ selectedPeriod.start }}–{{ selectedPeriod.end }}</h3>
           </div>
           <span class="detail-live-hint">會立即連動「現在狀態」</span>
@@ -1082,11 +1091,11 @@ function getStatusFor(dayKey, minute) {
             <label><span>第一節開始</span><input v-model="quick.firstStart" type="time" class="schedule-time-input" /></label>
             <label><span>每節課</span><div class="number-with-unit"><input v-model.number="quick.duration" type="number" min="1" max="120" /><b>分鐘</b></div></label>
             <label><span>一般下課</span><div class="number-with-unit"><input v-model.number="quick.breakMinutes" type="number" min="0" max="60" /><b>分鐘</b></div></label>
-            <label><span>上午節數</span><input v-model.number="quick.morningCount" type="number" min="1" max="8" /></label>
+            <label><span>上午節數</span><input v-model.number="quick.morningCount" type="number" min="1" max="7" /></label>
             <label><span>大下課在第幾節後</span><input v-model.number="quick.longBreakAfter" type="number" min="0" :max="quick.morningCount" /></label>
             <label><span>大下課</span><div class="number-with-unit"><input v-model.number="quick.longBreakMinutes" type="number" min="0" max="90" /><b>分鐘</b></div></label>
             <label><span>下午第一節開始</span><input v-model="quick.afternoonStart" type="time" class="schedule-time-input" /></label>
-            <label><span>下午節數</span><input v-model.number="quick.afternoonCount" type="number" min="0" max="8" /></label>
+            <label><span>下午節數</span><input v-model.number="quick.afternoonCount" type="number" min="0" :max="Math.max(0,7-quick.morningCount)" /></label>
             <label><span>下午下課</span><div class="number-with-unit"><input v-model.number="quick.afternoonBreakMinutes" type="number" min="0" max="60" /><b>分鐘</b></div></label>
           </div>
 
@@ -1100,7 +1109,7 @@ function getStatusFor(dayKey, minute) {
             <strong>套用前預覽</strong>
             <div class="quick-preview-grid">
               <span v-for="period in quickPreview" :key="period.id">
-                <b>{{ period.label }}</b>{{ period.start }}–{{ period.end }}
+                <b>{{ displayPeriodLabel(period) }}</b>{{ period.start }}–{{ period.end }}
               </span>
             </div>
           </div>

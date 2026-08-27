@@ -8,6 +8,7 @@ import {
   signInWithPopup,
 } from 'firebase/auth'
 import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check'
 
 const CENTRAL_APP_NAME = 'class-helper-optional-central-integration'
 let centralServices
@@ -54,7 +55,25 @@ export function resolveCentralPortalConfig(env = import.meta.env) {
         : requiredEnv('VITE_CENTRAL_FIREBASE_PROJECT_ID', env),
       appId: useEmulators ? '1:000000000000:web:class-helper-central' : requiredEnv('VITE_CENTRAL_FIREBASE_APP_ID', env),
     },
+    appCheck: {
+      enabled: !useEmulators && env.VITE_CENTRAL_APP_CHECK_ENABLED === 'true',
+      siteKey: !useEmulators && env.VITE_CENTRAL_APP_CHECK_ENABLED === 'true'
+        ? requiredEnv('VITE_CENTRAL_APP_CHECK_ENTERPRISE_SITE_KEY', env)
+        : '',
+      debug: useEmulators ? false : Boolean(env.DEV) && env.VITE_CENTRAL_APP_CHECK_DEBUG === 'true',
+    },
   }
+}
+
+export function initializeCentralPortalAppCheck(app, config, target = globalThis, dependencies = {}) {
+  if (!config.appCheck.enabled) return null
+  if (config.appCheck.debug) target.FIREBASE_APPCHECK_DEBUG_TOKEN = true
+  const makeProvider = dependencies.makeProvider || ((siteKey) => new ReCaptchaEnterpriseProvider(siteKey))
+  const initialize = dependencies.initialize || initializeAppCheck
+  return initialize(app, {
+    provider: makeProvider(config.appCheck.siteKey),
+    isTokenAutoRefreshEnabled: true,
+  })
 }
 
 export function getCentralPortalServices() {
@@ -63,6 +82,7 @@ export function getCentralPortalServices() {
   const config = resolveCentralPortalConfig()
   const app = getApps().find(candidate => candidate.name === CENTRAL_APP_NAME)
     || initializeApp(config.firebase, CENTRAL_APP_NAME)
+  initializeCentralPortalAppCheck(app, config)
   const auth = getAuth(app)
   const db = getFirestore(app)
 

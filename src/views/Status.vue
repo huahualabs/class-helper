@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { SCHEDULE_SOURCE_MODE, SCHEDULE_SOURCE_MODES, SHARED_CLASS_ID } from '../config/sharedClassSchedule'
 import { classScheduleRepository } from '@owner-class-schedule-repository'
 import { waitForCentralPortalSession } from '@owner-central-firebase'
+import { attendancePeriodLabel } from '../domain/attendancePeriods'
 
 const STORAGE_KEY = 'classHelperWeeklyScheduleV1'
 const router = useRouter()
@@ -187,6 +188,10 @@ const customDay = ref('')
 const showTestTools = ref(false)
 let timer = null
 
+function displayPeriodLabel(period) {
+  return attendancePeriodLabel(period, scheduleData.value.periods)
+}
+
 async function refreshSchedule() {
   if (!isCentralScheduleMode) {
     scheduleData.value = loadSchedule()
@@ -277,12 +282,12 @@ const currentStatus = computed(() => {
   if (activeIndex >= 0) {
     const period = periods[activeIndex]
     const entry = dayEntries[period.id] || defaultEntry(period.kind)
-    const title = entry.subject?.trim() || period.label
+    const title = entry.subject?.trim() || displayPeriodLabel(period)
     return {
       mode: 'active', kind: period.kind,
       icon: entryDisplayIcon(entry, period.kind),
       title,
-      periodLabel: `${period.label}・${period.start}–${period.end}`,
+      periodLabel: `${displayPeriodLabel(period)}・${period.start}–${period.end}`,
       message: entry.message?.trim() || defaultMessage(period.kind, title),
       minutesLeft: Math.max(0, toMinutes(period.end) - minute),
       next: makeNextInfo(periods[activeIndex + 1], dayEntries)
@@ -361,8 +366,8 @@ function makeNextInfo(period, dayEntries) {
   if (!period) return null
   const entry = dayEntries[period.id] || defaultEntry(period.kind)
   return {
-    periodLabel: period.label,
-    title: entry.subject?.trim() || period.label,
+    periodLabel: displayPeriodLabel(period),
+    title: entry.subject?.trim() || displayPeriodLabel(period),
     icon: entryDisplayIcon(entry, period.kind),
     start: period.start
   }
