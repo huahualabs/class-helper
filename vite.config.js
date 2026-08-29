@@ -12,13 +12,14 @@ export default defineConfig(({ mode }) => {
     throw new Error('Owner parent-portal integration requires VITE_CENTRAL_PORTAL_CLASS_ID.')
   }
   const ownerEnabled = profile === 'owner-parent-portal'
+  const defaultBasePath = ownerEnabled ? '/' : '/class-helper/'
   const integrationTarget = (ownerPath, disabledPath) => fileURLToPath(new URL(
     ownerEnabled ? ownerPath : disabledPath,
     import.meta.url,
   ))
   return {
     plugins: [vue()],
-    base: env.VITE_CLASS_HELPER_BASE_PATH || '/class-helper/',
+    base: env.VITE_CLASS_HELPER_BASE_PATH || defaultBasePath,
     resolve: {
       alias: {
         '@owner-central-firebase': integrationTarget(
