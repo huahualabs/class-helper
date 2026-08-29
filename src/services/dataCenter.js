@@ -512,11 +512,31 @@ export function getPersonalFirebaseConfig() {
   return safeJson(localStorage.getItem(FIREBASE_CONFIG_KEY), null)
 }
 
+export function normalizeAppCheckSiteKey(value) {
+  const siteKey = String(value ?? '').trim()
+  if (!siteKey) return ''
+
+  if (siteKey.length > 2048) {
+    throw new Error('App Check Site Key 長度不合理')
+  }
+
+  const containsMarkupOrCode = /<[^>]+>|javascript\s*:|(?:^|[;\n\r])\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=|(?:initializeAppCheck|ReCaptcha(?:Enterprise)?Provider)\s*\(/i
+  if (containsMarkupOrCode.test(siteKey)) {
+    throw new Error('請只貼 App Check Site Key，不要貼 script、HTML 或 JavaScript 程式碼')
+  }
+
+  if (/\s|[\u0000-\u001f\u007f]/.test(siteKey)) {
+    throw new Error('App Check Site Key 不可包含內部空白、換行或控制字元')
+  }
+
+  return siteKey
+}
+
 export function savePersonalFirebaseConfig(configOrText, options = {}) {
   const parsed = parseFirebaseConfig(configOrText)
   const config = {
     ...parsed,
-    appCheckSiteKey: String(options?.appCheckSiteKey || parsed?.appCheckSiteKey || '').trim()
+    appCheckSiteKey: normalizeAppCheckSiteKey(options?.appCheckSiteKey || parsed?.appCheckSiteKey || '')
   }
   const required = ['apiKey', 'authDomain', 'databaseURL', 'projectId', 'appId']
   const missing = required.filter(key => !String(config?.[key] || '').trim())
@@ -533,10 +553,6 @@ export function savePersonalFirebaseConfig(configOrText, options = {}) {
   if (!/^[a-z0-9-]+$/i.test(clean.projectId)) throw new Error('projectId 格式不正確')
   if (!/^[a-z0-9.-]+$/i.test(clean.authDomain)) throw new Error('authDomain 格式不正確')
   if (/\s/.test(clean.apiKey) || /\s/.test(clean.appId)) throw new Error('Firebase Config 內含不應出現的空白')
-  if (clean.appCheckSiteKey && !/^[A-Za-z0-9_-]{20,200}$/.test(clean.appCheckSiteKey)) {
-    throw new Error('App Check Site Key 格式不正確；請只貼上金鑰 ID，不要貼 script 程式碼')
-  }
-
   let databaseUrl
   try {
     databaseUrl = new URL(clean.databaseURL)
