@@ -1,9 +1,26 @@
 <script setup>
 // ✅ HUA_POINTS_2_TOOTHBRUSH_INTEGRATION_20260710：全班潔牙完成會先慶祝，再由老師選擇是否全班 +1。
 // ✅ HUA_TOOTHBRUSH_ONE_SCREEN_MOBILE_REVIEW_20260710：此頁已加入桌機一頁式與手機響應式檢查。
-// CHECK_MARKER_20260707_NAME_CENTER_COMPACT: contains isTuesday + visibleStudents; completed cards auto-hide; centered compact student names.
-import { computed, reactive, ref, watch } from 'vue'
+// CHECK_MARKER_20260707_NAME_CENTER_COMPACT: fixed student positions; completed cards remain visible.
+import { computed, reactive, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { parseStudentRoster } from '../domain/studentRoster'
+
+// TOOTHBRUSH_LUNCH_CLOCK: display-only local time, independent of selected records.
+const now = ref(new Date())
+let clockTimer
+onMounted(() => {
+  now.value = new Date()
+  clockTimer = window.setInterval(() => { now.value = new Date() }, 1000)
+})
+onBeforeUnmount(() => window.clearInterval(clockTimer))
+const clockText = computed(() => [now.value.getHours(), now.value.getMinutes(), now.value.getSeconds()]
+  .map(value => String(value).padStart(2, '0')).join(':'))
+const lunchPhase = computed(() => {
+  const minutes = now.value.getHours() * 60 + now.value.getMinutes()
+  if (minutes >= 710 && minutes < 720) return 'prepare'
+  if (minutes >= 740 && minutes < 750) return 'finish'
+  return ''
+})
 
 const today = new Date()
 const selectedDate = ref(toDateKey(today))
@@ -141,25 +158,24 @@ const selectedDateText = computed(() => `${selectedDateObject.value.getMonth() +
 const dayRecord = computed(() => records[selectedDate.value] ||= {})
 const isTuesday = computed(() => selectedDateObject.value.getDay() === 2)
 const mouthHint = computed(() => isTuesday.value
-  ? '今天是週二漱口日：左鍵第一下是 🦷 刷牙，第二下是 💧 漱口；完成漱口與消毒後，卡片會自動收起。'
-  : '今天是一般潔牙日：只需完成 🦷 刷牙與 🧽 桌面消毒；兩項完成後，卡片會自動收起。'
+  ? '今天是週二漱口日：左鍵第一下是 🦷 刷牙，第二下是 💧 漱口；完成漱口與消毒後，卡片會變成淺綠色。'
+  : '今天是一般潔牙日：只需完成 🦷 刷牙與 🧽 桌面消毒；兩項完成後，卡片會變成淺綠色。'
 )
 const dayModeLabel = computed(() => isTuesday.value ? '週二：刷牙＋漱口＋消毒' : '一般日：刷牙＋消毒')
-const visibleStudents = computed(() => students.value
-  .map((student, index) => ({ student, index }))
-  .filter(({ index }) => !isStudentComplete(index))
-)
+// TOOTHBRUSH_FIXED_CARDS: completion never filters or reorders the roster.
+const visibleStudents = computed(() => roster.value.map((student, index) => ({ ...student, index })))
+const remainingCount = computed(() => students.value.filter((_, index) => !isStudentComplete(index)).length)
 const remainingText = computed(() => students.value.length
-  ? `尚有 ${visibleStudents.value.length} 位學生未完成；完成者會自動收起`
+  ? remainingCount.value === 0 ? '✅ 今天全班都完成了！' : '尚有 ' + remainingCount.value + ' 位學生未完成｜已完成 ' + (students.value.length - remainingCount.value) + ' 位'
   : ''
 )
 
 watch(records, () => localStorage.setItem('toothbrushRecords', JSON.stringify(records)), { deep: true })
 watch(audioEnabled, value => localStorage.setItem('toothbrushSoundEnabled', String(value)))
 
-watch([visibleStudents, selectedDate], ([visible]) => {
+watch([remainingCount, selectedDate], ([remaining]) => {
   const promptKey = `toothbrush-${selectedDate.value}`
-  if (students.value.length > 0 && visible.length === 0) {
+  if (students.value.length > 0 && remaining === 0) {
     openCompletionReward({
       source: 'toothbrush',
       title: '全班潔牙完成！',
@@ -248,10 +264,13 @@ function isMouthComplete(index) {
   const state = mouthState(index)
   return isTuesday.value ? state === 'rinse' : state !== 'none'
 }
-function isStudentComplete(index) {
+function isDeskComplete(index) {
   const key = roster.value[index]?.key || `legacy-index-${index}`
   const item = dayRecord.value[key] || dayRecord.value[index]
-  return isMouthComplete(index) && !!item?.desk
+  return !!item?.desk
+}
+function isStudentComplete(index) {
+  return isMouthComplete(index) && isDeskComplete(index)
 }
 function toggleMouth(index) {
   const item = ensureStudent(index)
@@ -281,19 +300,30 @@ function showToast(message) {
 </script>
 
 <template>
-  <!-- CHECK_MARKER_20260707_CARD_AUTO_HIDE_VISIBLESTUDENTS_BIG_NAME -->
+  <!-- TOOTHBRUSH_FIXED_CARDS_BIG_NAME -->
   <div class="page wide-page toothbrush-page">
     <div class="page-title-row toothbrush-title-row">
       <div>
         <h2>🦷 潔牙與桌面消毒</h2>
         <p>一個畫面完成中午潔牙與飯後桌面消毒追蹤，點學生卡片按鍵即可切換。</p>
       </div>
-      <div class="date-controls compact-date-controls">
-        <button @click="moveDate(-1)">◀</button>
-        <button @click="goToday">今天</button>
-        <button @click="moveDate(1)">▶</button>
+      <div class="toothbrush-time-controls">
+        <div class="clock-panel">
+          <time class="current-clock" aria-label="目前時間">{{ clockText }}</time>
+          <span v-if="lunchPhase" class="clock-phase-hint">{{ lunchPhase === 'prepare' ? '準備開飯囉！' : '收尾時間，把握速度！' }}</span>
+        </div>
+        <div class="date-controls compact-date-controls">
+          <button @click="moveDate(-1)">◀</button>
+          <button @click="goToday">今天</button>
+          <button @click="moveDate(1)">▶</button>
+        </div>
       </div>
     </div>
+
+    <aside v-if="lunchPhase" class="lunch-reminder" aria-live="polite">
+      <strong>{{ lunchPhase === 'prepare' ? '安靜坐好、洗手、準備餐具、打菜' : '刷牙、消毒、抬餐' }}</strong>
+      <p v-if="lunchPhase === 'prepare'" class="lunch-chant">謝謝所有努力工作，讓我們吃到這餐的人！</p>
+    </aside>
 
     <section class="card toothbrush-card">
       <div class="tracking-top">
@@ -309,24 +339,21 @@ function showToast(message) {
       </div>
 
       <div v-if="students.length === 0" class="empty">尚未建立學生名單，請先到「學生名單」貼上名單。</div>
-      <div v-else-if="visibleStudents.length === 0" class="all-done">
-        <div class="all-done-icon">✅</div>
-        <strong>今天全班都完成了！</strong>
-        <span>{{ isTuesday ? '週二潔牙、漱口與桌面消毒都完成。' : '刷牙與桌面消毒都完成。' }}</span>
-      </div>
       <div v-else class="tracking-grid">
         <article
-          v-for="{ student, index } in visibleStudents"
-          :key="student + index"
+          v-for="{ key, seatNo, name, index } in visibleStudents"
+          :key="key"
           class="tracking-card"
           :class="{
             brushed: mouthState(index) === 'tooth',
             rinsed: mouthState(index) === 'rinse',
-            sanitized: dayRecord[index]?.desk
+            sanitized: isDeskComplete(index),
+            done: isStudentComplete(index)
           }"
         >
-          <span class="seat-badge">{{ index + 1 }}</span>
-          <strong class="student-name">{{ student }}</strong>
+          <span class="seat-badge">{{ seatNo }}</span>
+          <strong class="student-name">{{ name }}</strong>
+          <span class="completion-label">{{ isStudentComplete(index) ? '✅ 已完成' : '未完成' }}</span>
           <div class="tracking-buttons">
             <button
               class="mouth-button"
@@ -338,11 +365,11 @@ function showToast(message) {
             </button>
             <button
               class="desk-button"
-              :class="{ active: dayRecord[index]?.desk }"
-              title="桌面消毒"
+              :class="{ active: isDeskComplete(index) }"
+              :title="isDeskComplete(index) ? '再按一次取消消毒紀錄' : '按一次記錄消毒'"
               @click="toggleDesk(index)"
             >
-              {{ dayRecord[index]?.desk ? '✅ 消毒' : '🧽 消毒' }}
+              {{ isDeskComplete(index) ? '✅ 消毒' : '🧽 消毒' }}
             </button>
           </div>
         </article>
@@ -369,6 +396,43 @@ function showToast(message) {
 </template>
 
 <style scoped>
+.current-clock {
+  color: #173653;
+  font-size: 3rem;
+  font-weight: 800;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.toothbrush-time-controls { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+.clock-panel { display: grid; grid-auto-flow: column; align-items: center; justify-items: center; gap: 10px; padding: 8px 14px; border-radius: 16px; background: #edf5ec; border: 1px solid #d5e5d7; }
+.clock-phase-hint { max-width: 7em; color: #41634c; font-size: .9rem; font-weight: 700; line-height: 1.4; }
+.toothbrush-title-row > div:first-child { min-width: 0; }
+.lunch-reminder {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: #fff3d9;
+  color: #634c2d;
+  text-align: center;
+}
+.lunch-reminder strong { font-size: clamp(1.15rem, 2vw, 1.65rem); line-height: 1.4; }
+.lunch-chant { margin: 6px 0 0; font-size: clamp(1rem, 1.6vw, 1.25rem); line-height: 1.5; }
+@media (min-width: 981px) {
+  .lunch-reminder { display: flex; align-items: center; justify-content: center; gap: 18px; padding-block: 10px; }
+  .lunch-chant { margin: 0; max-width: 22em; }
+}
+.completion-label { text-align: center; color: #425568; font-size: .85rem; font-weight: 600; }
+.tracking-card.done .completion-label { color: #245b40; }
+@media (max-width: 760px) {
+  .toothbrush-time-controls { width: 100%; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .toothbrush-time-controls .compact-date-controls { display: grid !important; width: auto !important; grid-template-columns: auto auto auto !important; gap: 5px !important; }
+  .toothbrush-time-controls .compact-date-controls button { min-width: 0; padding: 8px; }
+  .current-clock { font-size: 2.5rem; }
+  .clock-panel { grid-auto-flow: row; gap: 4px; padding: 8px 10px; }
+  .clock-phase-hint { max-width: none; font-size: .8rem; }
+}
+
 .toothbrush-page {
   padding-bottom: 18px;
 }
@@ -389,6 +453,9 @@ function showToast(message) {
 }
 
 .compact-date-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-shrink: 0;
 }
 
@@ -497,7 +564,7 @@ function showToast(message) {
 
 .tracking-card.done {
   border-color: #78cba6;
-  background: #f7fff9;
+  background: #e1f3e7;
 }
 
 .seat-badge {

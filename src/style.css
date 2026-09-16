@@ -1366,7 +1366,11 @@ body {
 }
 .polished-vertical-book .vertical-sel-block strong {
   font-size: clamp(21px, 2.2vw, 30px);
-  font-weight: 900;
+  font-weight: 500;
+}
+/* DAILY_QUOTE_VERTICAL_WRAP: preserve type size; balance long quotes instead of orphaning the last character. */
+.polished-vertical-book .vertical-quote-block strong {
+  text-wrap: balance;
 }
 .polished-vertical-book .vertical-section-label {
   display: inline-flex;
@@ -1679,7 +1683,25 @@ body {
 .polished-vertical-book .vertical-contact-text {
   font-size: inherit;
   line-height: 1.5;
-  font-weight: 950;
+  font-weight: 500;
+}
+
+/* CONTACT_DIGIT_GROUPS：每組數字橫向壓入一字寬，保留原本直排欄寬。 */
+.polished-vertical-book .contact-digit-group {
+  text-combine-upright: all;
+  -webkit-text-combine: horizontal;
+  letter-spacing: 0;
+}
+
+/* CONTACT_DIGIT_GROUPS：p.87 等頁碼保留自然橫向寬度，不壓縮進一字寬。 */
+.polished-vertical-book .contact-page-reference {
+  display: inline-block;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  text-combine-upright: none;
+  white-space: nowrap;
+  letter-spacing: 0;
+  vertical-align: middle;
 }
 
 @media (min-width: 901px) {

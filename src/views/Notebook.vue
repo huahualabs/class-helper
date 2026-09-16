@@ -118,7 +118,9 @@ function openCompletionReward({ source, title, message, icon = '🌟', promptKey
   completionRewardMessage.value = message
   completionRewardIcon.value = icon
   playCompletionCelebrationSound()
-  setTimeout(() => { completionRewardOpen.value = true }, 650)
+  setTimeout(() => {
+    if (completionPrompted[promptKey]) completionRewardOpen.value = true
+  }, 650)
 }
 
 function closeCompletionReward() {
@@ -197,6 +199,56 @@ function loadBoards() {
 
 const boards = reactive(loadBoards())
 
+// NOTEBOOK_PENDING_UNDO：篩選與最近一步只存在記憶體，不加入同步資料。
+const hiddenCompleted = reactive({})
+const undoSteps = reactive({})
+
+function visibleStudentIndexes(board) {
+  return students.value.map((_, index) => index)
+    .filter(index => !hiddenCompleted[board.id] || studentStatus(board, index) !== 'ok')
+}
+
+function rememberBoardStep(board) {
+  undoSteps[board.id] = {
+    statuses: { ...board.statuses },
+    title: getTitle(board),
+    date: todayKey(),
+    records: Object.fromEntries(weeklyRecords.value.map(record => [record.key, {
+      resolved: record.resolved,
+      resolvedAt: record.resolvedAt
+    }]))
+  }
+}
+
+function canUndoBoard(board) {
+  const step = undoSteps[board.id]
+  return !!step && step.title === getTitle(board) && step.date === todayKey()
+}
+
+function undoBoardStep(board) {
+  if (!canUndoBoard(board)) return
+  const step = undoSteps[board.id]
+  board.statuses = { ...step.statuses }
+  board.sparkle = {}
+  // 恢復原有週紀錄的解決狀態；誤操作新增的紀錄保留，但標為已解決。
+  weeklyRecords.value.forEach(record => {
+    if (record.boardId !== board.id) return
+    const before = step.records[record.key]
+    if (before) {
+      record.resolved = before.resolved
+      if (before.resolvedAt === undefined) delete record.resolvedAt
+      else record.resolvedAt = before.resolvedAt
+    } else {
+      record.resolved = true
+      record.resolvedAt = new Date().toISOString()
+    }
+  })
+  delete undoSteps[board.id]
+  completionPrompted[`notebook-${todayKey()}-${board.id}`] = false
+  closeCompletionReward()
+  showToast(`已復原「${getTitle(board)}」上一步`)
+}
+
 // Legacy boards used array indexes. Convert them once while the current roster
 // still supplies the identity mapping; later roster reordering will not move a
 // status to another student.
@@ -244,6 +296,10 @@ const notifiedMap = ref(loadJson(NOTIFIED_KEY, {}))
 // ✅ HUA_FIREBASE_NOTEBOOK_LIVE_SYNC_20260711：手機登記缺交／訂正後，前方桌機簿本頁立即更新。
 function refreshNotebookFromCloud(event) {
   const keys = new Set(event?.detail?.keys || [])
+
+  if (keys.size === 0 || ['students', STORAGE_KEY, WEEKLY_KEY].some(key => keys.has(key))) {
+    Object.keys(undoSteps).forEach(key => { delete undoSteps[key] })
+  }
 
   if (keys.size === 0 || keys.has('students') || keys.has('className')) {
     cloudRefreshSeed.value += 1
@@ -374,6 +430,8 @@ function getWeekStart(date = new Date()) {
 const currentWeekStart = computed(() => getWeekStart())
 
 function setAll(board, status) {
+  if (!students.value.some((_, index) => studentStatus(board, index) !== status)) return
+  rememberBoardStep(board)
   students.value.forEach((_, index) => {
     updateStudentStatus(board, index, status)
   })
@@ -393,6 +451,7 @@ function toggleStatus(board, index) {
   }
   const next = nextMap[current]
 
+  rememberBoardStep(board)
   updateStudentStatus(board, index, next, current)
 
   if (next === 'ok') {
@@ -404,6 +463,7 @@ function toggleStatus(board, index) {
 }
 
 function updateStudentStatus(board, index, next, previous = studentStatus(board, index)) {
+  if (next === previous) return
   board.statuses[studentKey(index)] = next
   delete board.statuses[index]
 
@@ -420,8 +480,12 @@ function addWeeklyRecord(board, index, status) {
   const title = getTitle(board)
   const identity = studentKey(index)
   const recordKey = `${currentWeekStart.value}|${todayKey()}|${board.id}|${title}|${identity}|${status}`
-  const exists = weeklyRecords.value.some(record => record.key === recordKey)
-  if (exists) return
+  const existing = weeklyRecords.value.find(record => record.key === recordKey)
+  if (existing) {
+    existing.resolved = false
+    delete existing.resolvedAt
+    return
+  }
 
   weeklyRecords.value.push({
     key: recordKey,
@@ -560,6 +624,8 @@ function removeBoard(target = boards[boards.length - 1]) {
   if (!ok) return
 
   boards.splice(index, 1)
+  delete undoSteps[target.id]
+  delete hiddenCompleted[target.id]
   showToast(`➖ 已刪除「${title}」`)
 }
 
@@ -578,6 +644,7 @@ function closeClearDialog() {
 function clearBoardRecords() {
   if (!clearTarget.value || !clearConfirm.value) return
 
+  delete undoSteps[clearTarget.value.id]
   clearTarget.value.statuses = {}
   clearTarget.value.sparkle = {}
 
@@ -843,9 +910,17 @@ function formatDate(dateText) {
               <span>點擊順序：－ → ❌ → ⚠️ → ✅</span>
             </div>
 
+            <div class="board-pending-controls">
+              <span aria-live="polite">目前剩 {{ students.length - boardStats(board).ok }} 人待處理｜已完成 {{ boardStats(board).ok }} 人</span>
+              <button type="button" :aria-pressed="!!hiddenCompleted[board.id]" @click="hiddenCompleted[board.id] = !hiddenCompleted[board.id]">
+                {{ hiddenCompleted[board.id] ? '顯示全部' : '隱藏已完成' }}
+              </button>
+              <button type="button" :disabled="!canUndoBoard(board)" @click="undoBoardStep(board)">復原上一步</button>
+            </div>
+            <p v-if="hiddenCompleted[board.id] && isAllOk(board)" class="board-filter-empty">全部已完成，可按「顯示全部」查看。</p>
             <div class="seat-grid">
               <button
-                v-for="(student, index) in students"
+                v-for="index in visibleStudentIndexes(board)"
                 :key="studentKey(index)"
                 class="seat"
                 :class="statusClass(studentStatus(board, index))"
@@ -1016,6 +1091,28 @@ function formatDate(dateText) {
 </template>
 
 <style scoped>
+.board-pending-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: #354b43;
+}
+
+.board-pending-controls span { margin-right: auto; }
+.board-pending-controls button {
+  padding: 7px 10px;
+  border: 1px solid #c8d9ce;
+  border-radius: 10px;
+  background: #f4f8f2;
+  color: #354b43;
+  font: inherit;
+  cursor: pointer;
+}
+.board-pending-controls button:disabled { opacity: .45; cursor: default; }
+.board-filter-empty { color: #354b43; text-align: center; }
+
 .notebook-page {
   max-width: none;
   margin: 0;
