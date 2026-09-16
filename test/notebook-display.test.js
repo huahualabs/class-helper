@@ -156,22 +156,22 @@ test('single-letter lesson references stay horizontal without absorbing English 
   assert.deepEqual(parts.filter(p => p.digits).map(p => p.text), ['12', '13'])
 })
 
-test('measured quote capacity chooses one or two readable columns and preserves every quote', t => {
+test('vertical quotes fill columns and protect punctuation and short tails', t => {
   const d = componentLogic('Dashboard', 'splitVerticalQuote,dailyMessages')
   t.after(d.stop)
-  const short = '圖書館裡，腳步也輕一點。'
-  assert.deepEqual(d.splitVerticalQuote(short, 12), [short])
-  assert.deepEqual(d.splitVerticalQuote('螢幕時間到了，和它說聲明天見。', 12), ['螢幕時間到了，', '和它說聲明天見。'])
-  assert.deepEqual(d.splitVerticalQuote('每個人都不一樣，才有這麼多故事可聽。', 12), ['每個人都不一樣，', '才有這麼多故事可聽。'])
+  const current = '舉手說想法，讓大家聽見你。'
+  assert.deepEqual(d.splitVerticalQuote(current, 14), [current])
+  assert.deepEqual(d.splitVerticalQuote('一二三四五六七八九十甲乙丙丁戊己', 14), ['一二三四五六七八九十甲乙丙', '丁戊己'])
+  assert.deepEqual(d.splitVerticalQuote('一二三四五六七八九十，甲乙丙丁戊', 10), ['一二三四五六七八九', '十，甲乙丙丁戊'])
   for (const { quote } of d.dailyMessages) {
-    for (const capacity of [8, 10, 12, 16, 24]) {
+    for (const capacity of [8, 10, 12, 14, 16, 24]) {
       const columns = d.splitVerticalQuote(quote, capacity)
       assert.equal(columns.join(''), quote)
-      assert.equal(columns.length, Array.from(quote).length <= capacity ? 1 : 2)
-      if (columns.length === 2) {
-        assert.ok(columns.every(column => Array.from(column).length >= 3))
-        assert.ok(Math.abs(Array.from(columns[0]).length - Array.from(columns[1]).length) <= 3)
-        assert.doesNotMatch(columns[1], /^[，。！？、；：）」』】》〉]/u)
+      assert.equal(columns.length === 1, Array.from(quote).length <= capacity)
+      assert.ok(columns.every(column => Array.from(column).length <= capacity))
+      for (const column of columns.slice(1)) {
+        assert.ok((column.match(/\p{Script=Han}/gu) || []).length >= 3)
+        assert.doesNotMatch(column, /^[，。！？、；：）」』】》〉]/u)
       }
     }
   }

@@ -507,18 +507,21 @@ function splitVerticalQuote(text, capacity) {
   if (characters.length <= capacity) return [text]
   const closing = /^[，。！？、；：）」』】》〉…,.!?;:)]$/u
   const opening = /^[（「『【《〈(]$/u
-  const candidates = []
-  for (let index = 3; index <= characters.length - 3; index++) {
-    if (closing.test(characters[index]) || opening.test(characters[index - 1])) continue
-    candidates.push(index)
+  // Fill the column first; retreat only to avoid punctuation starts or a tiny tail.
+  const columns = []
+  const limit = Math.max(3, Math.floor(capacity))
+  let remaining = characters
+  while (remaining.length > limit) {
+    let split = Math.min(limit, remaining.length - 3)
+    while (split > 1 && (
+      closing.test(remaining[split]) || opening.test(remaining[split - 1]) ||
+      remaining.slice(split).filter(char => /\p{Script=Han}/u.test(char)).length < 3
+    )) split--
+    columns.push(remaining.slice(0, split).join(''))
+    remaining = remaining.slice(split)
   }
-  const fitting = candidates.filter(index => Math.max(index, characters.length - index) <= capacity)
-  // Prefer a nearby clause boundary (at most two characters less balanced), never a tiny tail.
-  const score = index => Math.abs(characters.length - 2 * index) - (closing.test(characters[index - 1]) ? 2.5 : 0)
-  const choices = fitting.length ? fitting : candidates
-  choices.sort((a, b) => score(a) - score(b) || b - a)
-  const split = choices[0] ?? Math.ceil(characters.length / 2)
-  return [characters.slice(0, split).join(''), characters.slice(split).join('')]
+  columns.push(remaining.join(''))
+  return columns
 }
 
 const quoteColumns = computed(() => splitVerticalQuote(currentQuote.value, quoteCapacity.value))
@@ -530,16 +533,13 @@ function measureQuoteSpace() {
   if (!text || !label) return
   const blockStyle = window.getComputedStyle(block)
   const textStyle = window.getComputedStyle(text)
-  const pageStyle = window.getComputedStyle(block.closest('.vertical-book-left'))
   const padding = parseFloat(blockStyle.paddingTop) + parseFloat(blockStyle.paddingBottom)
   const heading = label.getBoundingClientRect().height + parseFloat(blockStyle.gap)
   const fontSize = parseFloat(textStyle.fontSize)
   const advance = fontSize + (parseFloat(textStyle.letterSpacing) || 0)
-  const top = block.getBoundingClientRect().top + window.scrollY + parseFloat(blockStyle.paddingTop) + heading
-  const viewportSpace = window.innerHeight - top - parseFloat(pageStyle.paddingBottom)
   const columnSpace = Math.min(block.clientHeight, parseFloat(blockStyle.maxHeight)) - padding - heading
-  // Very short screens may scroll, but never shrink the font or create extra skinny columns.
-  quoteCapacity.value = Math.max(1, Math.floor(Math.min(viewportSpace, columnSpace) / advance))
+  // Use the book column's height; the viewport edge is not the bottom of the column.
+  quoteCapacity.value = Math.max(3, Math.floor(columnSpace / advance))
 }
 
 function scheduleQuoteMeasure() {
