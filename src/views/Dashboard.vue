@@ -683,7 +683,7 @@ function formatToday(date) {
           <div class="book-page-heading">親師交流</div>
           <div v-if="homeDisplay.dailyQuote" class="vertical-sel-content">
             <div ref="quoteBlock" class="vertical-sel-block vertical-quote-block">
-              <span class="vertical-section-label">今日一句</span>
+              <span class="vertical-section-label"><span>今日<br>一句</span></span>
               <strong class="quote-columns" :class="{ 'quote-two-columns': quoteColumns.length === 2 }" :aria-label="currentQuote"><span v-for="(column, index) in quoteColumns" :key="index" class="quote-column" aria-hidden="true">{{ column }}</span></strong>
             </div>
             <div v-if="homeDisplay.reflection" class="vertical-sel-block vertical-question-block">

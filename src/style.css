@@ -1375,6 +1375,10 @@ body {
 }
 .polished-vertical-book .vertical-quote-block .vertical-section-label {
   flex-shrink: 0;
+  /* Keep the four-character badge centered in two explicit horizontal rows. */
+  writing-mode: horizontal-tb;
+  white-space: nowrap;
+  line-height: 1.2;
 }
 .polished-vertical-book .vertical-quote-block .quote-columns {
   display: flex;
