@@ -133,3 +133,46 @@ test('page abbreviations form a single group without matching inside English wor
   const parts = d.contactTextParts('作業p.87，第12、13頁與第24、25頁')
   assert.deepEqual(parts.filter(part => part.digits).map(part => part.text), ['12', '13', '24', '25'])
 })
+
+test('single-letter lesson references stay horizontal without absorbing English words or page references', t => {
+  const d = componentLogic('Dashboard', 'contactTextParts')
+  t.after(d.stop)
+  for (const reference of ['L1', 'L2', 'L10', 'U1', 'U2', 'U10', 'l2', 'u10', 'A3', 'z12']) {
+    const text = `國課練${reference}`
+    const parts = d.contactTextParts(text)
+    assert.equal(parts.map(part => part.text).join(''), text)
+    assert.deepEqual(parts.filter(part => part.lessonReference).map(part => part.text), [reference])
+  }
+  for (const text of ['hello', 'Lesson2', 'Unit10', 'L2word', 'AL2', '1L2', '_L2']) {
+    assert.equal(d.contactTextParts(text).some(part => part.lessonReference), false, text)
+  }
+  for (const reference of ['p.4', 'p.12', 'p.100']) {
+    const parts = d.contactTextParts(`作業${reference}`)
+    assert.deepEqual(parts.filter(part => part.pageReference).map(part => part.text), [reference])
+    assert.equal(parts.some(part => part.lessonReference), false)
+  }
+  const parts = d.contactTextParts('國課練L2、L10，英語U3，作業p.4，數重第12、13頁')
+  assert.deepEqual(parts.filter(p => p.lessonReference).map(p => p.text), ['L2', 'L10', 'U3'])
+  assert.deepEqual(parts.filter(p => p.digits).map(p => p.text), ['12', '13'])
+})
+
+test('measured quote capacity chooses one or two readable columns and preserves every quote', t => {
+  const d = componentLogic('Dashboard', 'splitVerticalQuote,dailyMessages')
+  t.after(d.stop)
+  const short = '圖書館裡，腳步也輕一點。'
+  assert.deepEqual(d.splitVerticalQuote(short, 12), [short])
+  assert.deepEqual(d.splitVerticalQuote('螢幕時間到了，和它說聲明天見。', 12), ['螢幕時間到了，', '和它說聲明天見。'])
+  assert.deepEqual(d.splitVerticalQuote('每個人都不一樣，才有這麼多故事可聽。', 12), ['每個人都不一樣，', '才有這麼多故事可聽。'])
+  for (const { quote } of d.dailyMessages) {
+    for (const capacity of [8, 10, 12, 16, 24]) {
+      const columns = d.splitVerticalQuote(quote, capacity)
+      assert.equal(columns.join(''), quote)
+      assert.equal(columns.length, Array.from(quote).length <= capacity ? 1 : 2)
+      if (columns.length === 2) {
+        assert.ok(columns.every(column => Array.from(column).length >= 3))
+        assert.ok(Math.abs(Array.from(columns[0]).length - Array.from(columns[1]).length) <= 3)
+        assert.doesNotMatch(columns[1], /^[，。！？、；：）」』】》〉]/u)
+      }
+    }
+  }
+})

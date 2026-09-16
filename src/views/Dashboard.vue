@@ -106,12 +106,13 @@ function toLines(value) {
     .filter(Boolean)
 }
 
-// CONTACT_DIGIT_GROUPS：純數字與 p. 頁碼只在顯示時分組，原始文字保持不變。
+// CONTACT_DIGIT_GROUPS：數字、p. 頁碼、單字母課次只在顯示時分組，原始文字保持不變。
 function contactTextParts(value) {
-  return String(value).split(/((?<![A-Za-z0-9_])[pP]\.[0-9]+(?![A-Za-z0-9_])|[0-9０-９]+)/u).filter(Boolean).map(text => ({
+  return String(value).split(/((?<![A-Za-z0-9_])(?:[pP]\.[0-9]+|[A-Za-z][0-9]+)(?![A-Za-z0-9_])|[0-9０-９]+)/u).filter(Boolean).map(text => ({
     text,
     digits: /^[0-9０-９]+$/u.test(text),
-    pageReference: /^[pP]\.[0-9]+$/u.test(text)
+    pageReference: /^[pP]\.[0-9]+$/u.test(text),
+    lessonReference: /^[A-Za-z][0-9]+$/u.test(text)
   }))
 }
 
@@ -495,6 +496,75 @@ const todayEvents = computed(() => getTodayEvents(todayKey.value))
 const dailyQuoteIndex = computed(() => getDailyQuoteIndex(new Date()))
 const currentMessage = computed(() => dailyMessages[dailyQuoteIndex.value])
 const currentQuote = computed(() => currentMessage.value.quote)
+// DAILY_QUOTE_MEASURED_COLUMNS: use the visible writing space, not a fixed character threshold.
+const quoteBlock = ref(null)
+const quoteCapacity = ref(Infinity)
+let quoteResizeObserver
+let quoteMeasureFrame
+
+function splitVerticalQuote(text, capacity) {
+  const characters = Array.from(text)
+  if (characters.length <= capacity) return [text]
+  const closing = /^[，。！？、；：）」』】》〉…,.!?;:)]$/u
+  const opening = /^[（「『【《〈(]$/u
+  const candidates = []
+  for (let index = 3; index <= characters.length - 3; index++) {
+    if (closing.test(characters[index]) || opening.test(characters[index - 1])) continue
+    candidates.push(index)
+  }
+  const fitting = candidates.filter(index => Math.max(index, characters.length - index) <= capacity)
+  // Prefer a nearby clause boundary (at most two characters less balanced), never a tiny tail.
+  const score = index => Math.abs(characters.length - 2 * index) - (closing.test(characters[index - 1]) ? 2.5 : 0)
+  const choices = fitting.length ? fitting : candidates
+  choices.sort((a, b) => score(a) - score(b) || b - a)
+  const split = choices[0] ?? Math.ceil(characters.length / 2)
+  return [characters.slice(0, split).join(''), characters.slice(split).join('')]
+}
+
+const quoteColumns = computed(() => splitVerticalQuote(currentQuote.value, quoteCapacity.value))
+
+function measureQuoteSpace() {
+  const block = quoteBlock.value
+  const text = block?.querySelector('strong')
+  const label = block?.querySelector('.vertical-section-label')
+  if (!text || !label) return
+  const blockStyle = window.getComputedStyle(block)
+  const textStyle = window.getComputedStyle(text)
+  const pageStyle = window.getComputedStyle(block.closest('.vertical-book-left'))
+  const padding = parseFloat(blockStyle.paddingTop) + parseFloat(blockStyle.paddingBottom)
+  const heading = label.getBoundingClientRect().height + parseFloat(blockStyle.gap)
+  const fontSize = parseFloat(textStyle.fontSize)
+  const advance = fontSize + (parseFloat(textStyle.letterSpacing) || 0)
+  const top = block.getBoundingClientRect().top + window.scrollY + parseFloat(blockStyle.paddingTop) + heading
+  const viewportSpace = window.innerHeight - top - parseFloat(pageStyle.paddingBottom)
+  const columnSpace = Math.min(block.clientHeight, parseFloat(blockStyle.maxHeight)) - padding - heading
+  // Very short screens may scroll, but never shrink the font or create extra skinny columns.
+  quoteCapacity.value = Math.max(1, Math.floor(Math.min(viewportSpace, columnSpace) / advance))
+}
+
+function scheduleQuoteMeasure() {
+  window.cancelAnimationFrame(quoteMeasureFrame)
+  quoteMeasureFrame = window.requestAnimationFrame(measureQuoteSpace)
+}
+
+watch(quoteBlock, block => {
+  quoteResizeObserver?.disconnect()
+  if (!block) return
+  quoteResizeObserver = new ResizeObserver(scheduleQuoteMeasure)
+  quoteResizeObserver.observe(block)
+  scheduleQuoteMeasure()
+}, { flush: 'post' })
+
+onMounted(() => {
+  window.addEventListener('resize', scheduleQuoteMeasure)
+  document.fonts?.addEventListener('loadingdone', scheduleQuoteMeasure)
+})
+onBeforeUnmount(() => {
+  quoteResizeObserver?.disconnect()
+  window.cancelAnimationFrame(quoteMeasureFrame)
+  window.removeEventListener('resize', scheduleQuoteMeasure)
+  document.fonts?.removeEventListener('loadingdone', scheduleQuoteMeasure)
+})
 const currentQuestion = computed(() => currentMessage.value.question)
 
 // ✅ HUA_HOME_QUOTE_SINGLE_LINE_20260712：桌機依句子長度自動縮放，讓完整「今日一句」盡量維持同一行。
@@ -612,9 +682,9 @@ function formatToday(date) {
         <section class="vertical-book-left">
           <div class="book-page-heading">親師交流</div>
           <div v-if="homeDisplay.dailyQuote" class="vertical-sel-content">
-            <div class="vertical-sel-block vertical-quote-block">
+            <div ref="quoteBlock" class="vertical-sel-block vertical-quote-block">
               <span class="vertical-section-label">今日一句</span>
-              <strong>{{ currentQuote }}</strong>
+              <strong class="quote-columns" :class="{ 'quote-two-columns': quoteColumns.length === 2 }" :aria-label="currentQuote"><span v-for="(column, index) in quoteColumns" :key="index" class="quote-column" aria-hidden="true">{{ column }}</span></strong>
             </div>
             <div v-if="homeDisplay.reflection" class="vertical-sel-block vertical-question-block">
               <span class="vertical-section-label">想一想</span>
@@ -639,7 +709,7 @@ function formatToday(date) {
           >
             <div v-for="(item, index) in mergedContactItems" :key="`vertical-contact-${index}`" class="vertical-contact-item">
               <span class="vertical-contact-index">{{ index + 1 }}</span>
-              <span class="vertical-contact-text"><span v-for="(part, partIndex) in contactTextParts(item)" :key="partIndex" :class="{ 'contact-digit-group': part.digits, 'contact-page-reference': part.pageReference }">{{ part.text }}</span></span>
+              <span class="vertical-contact-text"><span v-for="(part, partIndex) in contactTextParts(item)" :key="partIndex" :class="{ 'contact-digit-group': part.digits, 'contact-page-reference': part.pageReference || part.lessonReference }">{{ part.text }}</span></span>
             </div>
           </div>
         </section>

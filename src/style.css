@@ -1368,9 +1368,28 @@ body {
   font-size: clamp(21px, 2.2vw, 30px);
   font-weight: 500;
 }
-/* DAILY_QUOTE_VERTICAL_WRAP: preserve type size; balance long quotes instead of orphaning the last character. */
-.polished-vertical-book .vertical-quote-block strong {
-  text-wrap: balance;
+/* DAILY_QUOTE_MEASURED_COLUMNS: explicit right-to-left columns with natural vertical spacing. */
+.polished-vertical-book .vertical-sel-block.vertical-quote-block {
+  /* Keep the existing column allocation; the shared mobile max-height still applies. */
+  height: 520px;
+}
+.polished-vertical-book .vertical-quote-block .vertical-section-label {
+  flex-shrink: 0;
+}
+.polished-vertical-book .vertical-quote-block .quote-columns {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  writing-mode: horizontal-tb;
+  flex-shrink: 0;
+  letter-spacing: .02em;
+}
+.polished-vertical-book .vertical-quote-block .quote-column {
+  display: block;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  white-space: nowrap;
+  line-height: 1.55;
 }
 .polished-vertical-book .vertical-section-label {
   display: inline-flex;
@@ -1693,7 +1712,7 @@ body {
   letter-spacing: 0;
 }
 
-/* CONTACT_DIGIT_GROUPS：p.87 等頁碼保留自然橫向寬度，不壓縮進一字寬。 */
+/* CONTACT_DIGIT_GROUPS：p.87 頁碼與 L2 / U10 課次保留自然橫向寬度。 */
 .polished-vertical-book .contact-page-reference {
   display: inline-block;
   writing-mode: horizontal-tb;
